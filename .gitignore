@@ -1,0 +1,5 @@
+*.retry
+*.swp
+.DS_Store
+__pycache__/
+.venv/
