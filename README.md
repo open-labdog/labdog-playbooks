@@ -46,6 +46,18 @@ it up with zero configuration). Use the top-level `roles/` for roles
 that are genuinely shared across actions — LabDog adds it to
 `ANSIBLE_ROLES_PATH` for every playbook in the pack.
 
+## Actions in this pack
+
+| Action | Targets | Mode | Summary |
+|---|---|---|---|
+| [`alloy-install`](./actions/alloy-install/) | host, group | per-host | Install and configure Grafana Alloy on Debian/Ubuntu hosts; ships metrics + logs to Prometheus and Loki with optional service auto-detection. |
+| [`k8s-upgrade`](./actions/k8s-upgrade/) | group | cluster | Drain, `kubeadm`-upgrade, and re-admit each node serially across the `control_plane` and `workers` groups. Apt-only. |
+| [`linux-upgrade`](./actions/linux-upgrade/) | host, group | per-host | `apt upgrade` all packages and reboot if `/var/run/reboot-required` is set. Uses `verify/post-upgrade.yml` as the success gate. |
+| [`linux-os-upgrade`](./actions/linux-os-upgrade/) | host, group | per-host | Major-release distribution upgrade (e.g. Debian 12→13, Ubuntu 22.04→24.04) via `apt dist-upgrade`. |
+
+Each action ships its own README under `actions/<key>/` covering
+parameters, prerequisites, and customization points.
+
 ## Manifest schema
 
 ```yaml
@@ -207,6 +219,28 @@ labdog repo at
 - `with-role/` — pack that ships its own Ansible role.
 - `with-verify/` — pack-supplied verify playbook with healthz/version
   probes.
+
+## Contributing / CI
+
+Every merge request targeting the default branch runs the
+`validate-manifests` job in [`.gitlab-ci.yml`](./.gitlab-ci.yml). The
+job clones the labdog repo, imports `app.actions.manifest.ActionManifest`
+(the same Pydantic model the runtime uses), and validates every
+`actions/*/manifest.yml` against it via
+[`scripts/validate_manifests.py`](./scripts/validate_manifests.py).
+
+Schema typos, missing required fields, and unknown keys (the model
+sets `extra="forbid"`) fail the pipeline pre-merge instead of breaking
+LabDog instances at pack-load time. Pin `LABDOG_REPO_REF` in the
+GitLab project settings to a labdog tag once releases start cutting,
+and bump it deliberately when you want this pack to track new schema.
+
+To run the same check locally before pushing:
+
+```bash
+git clone --depth 1 https://github.com/open-labdog/labdog.git /tmp/labdog
+LABDOG_SRC=/tmp/labdog python scripts/validate_manifests.py
+```
 
 ## License
 
