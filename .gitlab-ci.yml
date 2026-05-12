@@ -1,0 +1,38 @@
+# Manifest Validation
+#
+# Validates every actions/*/manifest.yml in this pack against the
+# canonical ActionManifest Pydantic model from the labdog repo.
+# Catches typos and schema drift in pack contributions before they
+# reach a labdog instance.
+#
+# The validator imports app.actions.manifest:ActionManifest directly
+# from a fresh checkout of labdog — no schema duplication, so any new
+# required field upstream auto-fails labdog-playbooks MRs that haven't
+# been updated. Pin LABDOG_REPO_REF to a tag once labdog cuts releases
+# and bump it intentionally.
+
+stages:
+  - validate
+
+variables:
+  # Override these CI variables in the project settings (or here) to
+  # point at a labdog mirror — e.g. an internal GitLab clone if the
+  # runner can't reach github.com.
+  LABDOG_REPO_URL: "https://github.com/open-labdog/labdog.git"
+  LABDOG_REPO_REF: "main"
+
+validate-manifests:
+  stage: validate
+  image: python:3.12-slim
+  rules:
+    # Run on merge requests targeting the default branch and on manual
+    # web triggers. Skip plain push events to avoid double-firing on
+    # MR merges.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates
+    - pip install --quiet pydantic pyyaml
+  script:
+    - git clone --depth 1 --branch "$LABDOG_REPO_REF" "$LABDOG_REPO_URL" _labdog_src
+    - LABDOG_SRC=_labdog_src python scripts/validate_manifests.py
