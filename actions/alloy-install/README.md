@@ -10,13 +10,6 @@ host and group views. The manifest's UI-exposed parameters cover the common
 operator knobs (endpoints, install method, detection toggle); deeper tuning
 is done by forking this pack and editing role defaults.
 
-> **Status: structural only.** The base `.alloy.j2` templates that
-> [`role-alloy-linux-configure`](./roles/role-alloy-linux-configure/) renders
-> are not yet in the pack. The action will install Alloy successfully but
-> fail at the base-config step with "template not found" until
-> `roles/role-alloy-linux-configure/templates/` is populated. See
-> [Role architecture](#role-architecture) for the expected template list.
-
 ## What it does
 
 1. Adds the Grafana APT repo and installs the `alloy` package (skipped when
@@ -55,9 +48,9 @@ with no extra configuration. Base `.alloy.j2` templates live at
 `roles/role-alloy-linux-configure/templates/` and ship with the pack —
 no external fetch.
 
-### Expected base templates
+### Bundled templates
 
-Once authored, the following files must exist at
+The pack ships these `.j2` templates at
 `roles/role-alloy-linux-configure/templates/`:
 
 | Template | Rendered to | Owner |

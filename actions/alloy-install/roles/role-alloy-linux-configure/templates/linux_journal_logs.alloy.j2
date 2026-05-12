@@ -1,0 +1,41 @@
+// Managed by Ansible — do not edit manually
+
+loki.source.journal "journal_logs" {
+  max_age       = "24h0m0s"
+  relabel_rules = discovery.relabel.journal_logs.rules
+  forward_to    = [loki.write.default.receiver]
+}
+
+discovery.relabel "journal_logs" {
+  targets = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal__boot_id"]
+    target_label  = "boot_id"
+  }
+
+  rule {
+    source_labels = ["__journal__transport"]
+    target_label  = "transport"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+
+  rule {
+      target_label = "job"
+      replacement = "journal_logs"
+  }
+
+  rule {
+      target_label = "instance"
+      replacement = constants.hostname
+  }
+}
