@@ -1,0 +1,74 @@
+---
+# Deploys .alloy config files from group_configs/<group>/*.alloy.j2 on the controller.
+# Runs for every group the host belongs to, plus the special "all" subdirectory.
+# Stale group config files (from groups the host no longer belongs to) are removed.
+# The group_configs/ tree lives next to playbook.yml in this pack — no external
+# fetch.
+
+- name: Find group config templates applicable to this host
+  ansible.builtin.find:
+    paths: "{{ alloy_group_configs_dir }}/{{ item }}"
+    patterns: "*.alloy.j2"
+  loop: "{{ ['all'] + group_names }}"
+  register: _alloy_group_config_search
+  delegate_to: localhost
+  become: false
+  ignore_errors: true
+
+- name: Flatten group templates applicable to this host
+  ansible.builtin.set_fact:
+    _alloy_group_templates: >-
+      {{ _alloy_group_config_search.results
+         | selectattr('matched', 'defined')
+         | selectattr('matched', 'gt', 0)
+         | map(attribute='files')
+         | flatten }}
+
+- name: Deploy group config files to host
+  ansible.builtin.template:
+    src: "{{ item.path }}"
+    dest: "{{ alloy_confd_dir }}/{{ item.path | basename | regex_replace('\\.j2$', '') }}"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  loop: "{{ _alloy_group_templates }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  notify: Restart alloy
+
+- name: Build list of expected group config filenames for this host
+  ansible.builtin.set_fact:
+    _alloy_expected_group_configs: >-
+      {{ _alloy_group_templates
+         | map(attribute='path')
+         | map('basename')
+         | map('regex_replace', '\\.j2$', '')
+         | list }}
+
+- name: Find all group config templates across every group (for stale detection)
+  ansible.builtin.find:
+    paths: "{{ alloy_group_configs_dir }}"
+    patterns: "*.alloy.j2"
+    recurse: true
+  register: _alloy_all_group_template_search
+  delegate_to: localhost
+  become: false
+  ignore_errors: true
+
+- name: Build list of all known group config filenames
+  ansible.builtin.set_fact:
+    _alloy_all_known_group_configs: >-
+      {{ (_alloy_all_group_template_search.files | default([]))
+         | map(attribute='path')
+         | map('basename')
+         | map('regex_replace', '\\.j2$', '')
+         | list | unique }}
+
+- name: Remove stale group config files no longer applicable to this host
+  ansible.builtin.file:
+    path: "{{ alloy_confd_dir }}/{{ item }}"
+    state: absent
+  loop: "{{ _alloy_all_known_group_configs | difference(_alloy_expected_group_configs) }}"
+  loop_control:
+    label: "{{ item }}"
+  notify: Restart alloy
