@@ -1,0 +1,81 @@
+// Managed by Ansible — do not edit manually
+
+/////////////
+// Metrics //
+/////////////
+
+prometheus.exporter.cadvisor "docker" {
+  docker_host = "unix:///var/run/docker.sock"
+}
+
+prometheus.scrape "docker" {
+  targets    = prometheus.exporter.cadvisor.docker.targets
+  forward_to = [prometheus.relabel.relabel_metrics.receiver]
+}
+
+prometheus.relabel "relabel_metrics" {
+  rule {
+      target_label = "job"
+      replacement = "docker"
+  }
+
+  rule {
+      target_label = "instance"
+      replacement = constants.hostname
+  }
+
+  rule {
+      source_labels = ["__meta_docker_container_name"]
+      regex = "/(.*)"
+      target_label = "container"
+  }
+
+  rule {
+      source_labels = ["__meta_docker_container_log_stream"]
+      target_label = "stream"
+  }
+
+  forward_to = [
+    prometheus.remote_write.default.receiver,
+  ]
+}
+
+////////////
+/// Logs ///
+////////////
+
+discovery.docker "docker" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker" {
+  targets = discovery.docker.docker.targets
+
+  rule {
+      target_label = "job"
+      replacement = "docker"
+  }
+
+  rule {
+      target_label = "instance"
+      replacement = constants.hostname
+  }
+
+  rule {
+      source_labels = ["__meta_docker_container_name"]
+      regex = "/(.*)"
+      target_label = "container"
+  }
+
+  rule {
+      source_labels = ["__meta_docker_container_log_stream"]
+      target_label = "stream"
+  }
+}
+
+loki.source.docker "default" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.docker.targets
+  relabel_rules = discovery.relabel.docker.rules
+  forward_to    = [loki.write.default.receiver]
+}

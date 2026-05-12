@@ -1,0 +1,36 @@
+---
+- name: Install and configure Grafana Alloy
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Refuse non-Debian-family hosts
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: >-
+          alloy-install supports Debian/Ubuntu hosts only. Detected
+          os_family={{ ansible_os_family }}. RHEL-family / other
+          distros are not yet supported by this pack.
+
+  roles:
+    # Add Grafana APT repository — skipped for local package installs.
+    - role: role-alloy-linux-repo
+      when:
+        - not alloy_config_only | default(false) | bool
+        - alloy_install_method | default('repo') == "repo"
+
+    # Install Alloy package (from repo or local file).
+    - role: role-alloy-linux-install
+      when: not alloy_config_only | default(false) | bool
+
+    # Deploy base configs + group-based configs.
+    - role: role-alloy-linux-configure
+
+    # Detect running services / listening ports.
+    - role: role-alloy-linux-detect
+      when: alloy_detect_services | default(true) | bool
+
+    # Deploy per-service config files (docker, mysql, postgresql, custom).
+    - role: role-alloy-linux-services
+
+    # Manage the alloy systemd service.
+    - role: role-alloy-linux-service

@@ -1,0 +1,29 @@
+---
+# Detection method: "service", "port", or "any"
+alloy_detection_method: "service"
+
+# Service map — drives detection and config deployment
+alloy_service_map:
+  docker:
+    systemd_names:
+      - docker.service
+    port: null
+    template: docker.alloy.j2
+    config_file: docker.alloy
+  mysql:
+    systemd_names:
+      - mariadb.service
+      - mysqld.service
+      - mysql.service
+    port: 3306
+    template: mysql.alloy.j2
+    config_file: mysql.alloy
+  postgresql:
+    systemd_names:
+      - postgresql.service
+    port: 5432
+    template: postgresql.alloy.j2
+    config_file: postgresql.alloy
+
+# Custom services — dictionary of service_name: port
+alloy_custom_services: {}

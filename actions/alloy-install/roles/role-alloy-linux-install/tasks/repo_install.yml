@@ -1,0 +1,55 @@
+---
+- name: Gather package facts for local install detection
+  ansible.builtin.package_facts:
+    manager: apt
+  when: alloy_replace_local_install
+
+- name: Check if Alloy was installed from Grafana repository
+  ansible.builtin.shell:
+    cmd: apt-cache policy alloy | grep -q 'https://apt.grafana.com'
+  register: _alloy_repo_check
+  changed_when: false
+  failed_when: false
+  when:
+    - alloy_replace_local_install
+    - "'alloy' in ansible_facts.packages"
+
+- name: Stop locally installed Alloy service
+  ansible.builtin.systemd:
+    name: alloy
+    state: stopped
+  when:
+    - alloy_replace_local_install
+    - "'alloy' in ansible_facts.packages"
+    - _alloy_repo_check.rc is defined
+    - _alloy_repo_check.rc != 0
+  ignore_errors: true
+
+- name: Remove locally installed Alloy package
+  ansible.builtin.apt:
+    name: alloy
+    state: absent
+    purge: true
+  when:
+    - alloy_replace_local_install
+    - "'alloy' in ansible_facts.packages"
+    - _alloy_repo_check.rc is defined
+    - _alloy_repo_check.rc != 0
+
+- name: Pre-write /etc/default/alloy before package install
+  ansible.builtin.copy:
+    dest: /etc/default/alloy
+    content: |
+      ## Managed by Ansible — do not edit manually
+      CONFIG_FILE="{{ alloy_confd_dir }}"
+      CUSTOM_ARGS=""
+      RESTART_ON_UPGRADE=true
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Alloy
+  ansible.builtin.apt:
+    name: alloy
+    state: present
+    update_cache: true

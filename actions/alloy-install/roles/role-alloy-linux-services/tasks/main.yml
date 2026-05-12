@@ -1,0 +1,118 @@
+---
+# _alloy_template_dir and _alloy_detected / _alloy_custom_detected facts are
+# set by role-alloy-configure and role-alloy-detect respectively, which run
+# earlier in the same play.
+
+- name: Assert template directory fact is available
+  ansible.builtin.assert:
+    that: _alloy_template_dir is defined
+    fail_msg: >-
+      _alloy_template_dir is not set. role-alloy-configure must run before
+      role-alloy-services in the same play. If using tags, include 'configure'
+      together with 'services' (e.g. --tags configure,services,service).
+
+- name: Create systemd override directory for Alloy
+  ansible.builtin.file:
+    path: /etc/systemd/system/alloy.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: >-
+    (alloy_force_docker is not none)
+    | ternary(
+        alloy_force_docker | bool,
+        (_alloy_detected | default({})).docker | default(false)
+      )
+
+- name: Deploy systemd override to run Alloy as root (docker hosts)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/alloy.service.d/override.conf
+    content: |
+      [Service]
+      User=root
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart alloy
+  when: >-
+    (alloy_force_docker is not none)
+    | ternary(
+        alloy_force_docker | bool,
+        (_alloy_detected | default({})).docker | default(false)
+      )
+
+- name: Remove systemd override on non-docker hosts
+  ansible.builtin.file:
+    path: /etc/systemd/system/alloy.service.d/override.conf
+    state: absent
+  notify: Restart alloy
+  when: >-
+    not (
+      (alloy_force_docker is not none)
+      | ternary(
+          alloy_force_docker | bool,
+          (_alloy_detected | default({})).docker | default(false)
+        )
+    )
+
+- name: Deploy service configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/{{ item.value.template }}"
+    dest: "{{ alloy_confd_dir }}/{{ item.value.config_file }}"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: >-
+    (lookup('vars', 'alloy_force_' + item.key, default=none) is not none)
+    | ternary(
+        lookup('vars', 'alloy_force_' + item.key, default=none),
+        (_alloy_detected | default({}))[item.key] | default(false)
+      )
+  notify: Restart alloy
+
+- name: Remove configuration for absent services
+  ansible.builtin.file:
+    path: "{{ alloy_confd_dir }}/{{ item.value.config_file }}"
+    state: absent
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: >-
+    not (
+      (lookup('vars', 'alloy_force_' + item.key, default=none) is not none)
+      | ternary(
+          lookup('vars', 'alloy_force_' + item.key, default=none),
+          (_alloy_detected | default({}))[item.key] | default(false)
+        )
+    )
+  notify: Restart alloy
+
+- name: Deploy custom service configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/service.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/{{ item.key }}.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  vars:
+    service_name: "{{ item.key }}"
+    service_port: "{{ item.value }}"
+  loop: "{{ alloy_custom_services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (_alloy_custom_detected | default({}))[item.key] | default(false)
+  notify: Restart alloy
+
+- name: Remove configuration for absent custom services
+  ansible.builtin.file:
+    path: "{{ alloy_confd_dir }}/{{ item.key }}.alloy"
+    state: absent
+  loop: "{{ alloy_custom_services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: not ((_alloy_custom_detected | default({}))[item.key] | default(false))
+  notify: Restart alloy

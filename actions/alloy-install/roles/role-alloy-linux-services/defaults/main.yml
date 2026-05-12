@@ -1,0 +1,38 @@
+---
+alloy_confd_dir: /etc/alloy/conf.d
+alloy_user: alloy
+alloy_group: alloy
+
+# Per-service force overrides (null = auto-detect, true = force enable, false = force disable)
+alloy_force_docker: null
+alloy_force_mysql: null
+alloy_force_postgresql: null
+
+# Database connection strings
+alloy_mysql_data_source: "exporter:exporter_password@(localhost:3306)/"
+alloy_postgres_data_source: "postgresql://exporter:exporter_password@localhost:5432/postgres?sslmode=disable"
+
+# Service map — must match the definition used in role-alloy-detect
+alloy_service_map:
+  docker:
+    systemd_names:
+      - docker.service
+    port: null
+    template: docker.alloy.j2
+    config_file: docker.alloy
+  mysql:
+    systemd_names:
+      - mariadb.service
+      - mysqld.service
+      - mysql.service
+    port: 3306
+    template: mysql.alloy.j2
+    config_file: mysql.alloy
+  postgresql:
+    systemd_names:
+      - postgresql.service
+    port: 5432
+    template: postgresql.alloy.j2
+    config_file: postgresql.alloy
+
+alloy_custom_services: {}

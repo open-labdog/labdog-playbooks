@@ -1,0 +1,54 @@
+---
+- name: Configure Alloy environment file
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/alloy-env.j2"
+    dest: /etc/default/alloy
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart alloy
+
+- name: Deploy endpoints configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/endpoints.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/endpoints.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  notify: Restart alloy
+
+- name: Deploy Linux node metrics configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/linux_node_metrics.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/linux_node_metrics.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  notify: Restart alloy
+
+- name: Deploy Alloy self-monitoring configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/alloy.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/alloy.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  notify: Restart alloy
+
+- name: Deploy journal log collection configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/linux_journal_logs.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/linux_journal_logs.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  notify: Restart alloy
+
+- name: Deploy file log collection configuration
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/linux_file_logs.alloy.j2"
+    dest: "{{ alloy_confd_dir }}/linux_file_logs.alloy"
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  notify: Restart alloy

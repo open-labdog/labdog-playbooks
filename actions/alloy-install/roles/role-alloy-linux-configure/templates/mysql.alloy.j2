@@ -1,0 +1,21 @@
+// Managed by Ansible — do not edit manually
+
+prometheus.exporter.mysql "default" {
+  data_source_name = "{{ alloy_mysql_data_source }}"
+}
+
+prometheus.scrape "mysql" {
+  targets    = prometheus.exporter.mysql.default.targets
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+local.file_match "mysql_logs" {
+  path_targets = [
+    {__path__ = "/var/log/mysql/*.log", job = "integrations/mysql"},
+  ]
+}
+
+loki.source.file "mysql" {
+  targets    = local.file_match.mysql_logs.targets
+  forward_to = [loki.write.default.receiver]
+}

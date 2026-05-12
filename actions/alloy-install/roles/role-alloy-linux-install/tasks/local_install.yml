@@ -1,0 +1,40 @@
+---
+- name: Detect package type from file extension
+  ansible.builtin.set_fact:
+    _alloy_pkg_type: "{{ 'deb' if alloy_local_package_path.endswith('.deb') else 'rpm' }}"
+
+- name: Copy package to remote host
+  ansible.builtin.copy:
+    src: "{{ alloy_local_package_path }}"
+    dest: "/tmp/alloy-local-package.{{ _alloy_pkg_type }}"
+    mode: "0600"
+
+- name: Pre-write /etc/default/alloy before package install
+  ansible.builtin.copy:
+    dest: /etc/default/alloy
+    content: |
+      ## Managed by Ansible — do not edit manually
+      CONFIG_FILE="{{ alloy_confd_dir }}"
+      CUSTOM_ARGS=""
+      RESTART_ON_UPGRADE=true
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Alloy from local .deb package
+  ansible.builtin.apt:
+    deb: "/tmp/alloy-local-package.deb"
+    state: present
+  when: _alloy_pkg_type == "deb"
+
+- name: Install Alloy from local .rpm package
+  ansible.builtin.dnf:
+    name: "/tmp/alloy-local-package.rpm"
+    state: present
+    disable_gpg_check: true
+  when: _alloy_pkg_type == "rpm"
+
+- name: Remove temporary package file
+  ansible.builtin.file:
+    path: "/tmp/alloy-local-package.{{ _alloy_pkg_type }}"
+    state: absent

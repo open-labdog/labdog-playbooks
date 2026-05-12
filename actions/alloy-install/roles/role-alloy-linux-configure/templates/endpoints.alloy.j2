@@ -1,0 +1,25 @@
+// Managed by Ansible — do not edit manually
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "{{ alloy_prometheus_url }}"
+
+    headers = {
+      "X-Scope-OrgID" = "{{ alloy_mimir_org_id }}",
+    }
+
+    tls_config {
+      insecure_skip_verify = {{ alloy_tls_insecure_skip_verify | lower }}
+    }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "{{ alloy_loki_url }}"
+
+    tls_config {
+      insecure_skip_verify = {{ alloy_tls_insecure_skip_verify | lower }}
+    }
+  }
+}
