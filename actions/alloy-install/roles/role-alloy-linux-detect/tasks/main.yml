@@ -1,0 +1,104 @@
+---
+- name: Gather service facts
+  ansible.builtin.service_facts:
+  when: alloy_detection_method in ['service', 'any']
+
+- name: Gather listening ports
+  ansible.builtin.shell: ss -tlnH | awk '{print $4}' | grep -oE '[0-9]+$' | sort -u
+  register: _listening_ports_raw
+  changed_when: false
+  when: alloy_detection_method in ['port', 'any']
+
+- name: Parse listening ports into list
+  ansible.builtin.set_fact:
+    _alloy_listening_ports: "{{ _listening_ports_raw.stdout_lines | map('int') | list }}"
+  when: alloy_detection_method in ['port', 'any']
+
+- name: Detect services (service-based)
+  ansible.builtin.set_fact:
+    _alloy_detected: >-
+      {{ _alloy_detected | default({}) | combine({
+           item.key: (item.value.systemd_names | intersect(ansible_facts.services.keys() | list)
+                      | map('extract', ansible_facts.services)
+                      | selectattr('state', 'eq', 'running') | list) | length > 0
+         }) }}
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: alloy_detection_method == 'service'
+
+- name: Detect services (port-based)
+  ansible.builtin.set_fact:
+    _alloy_detected: >-
+      {{ _alloy_detected | default({}) | combine({
+           item.key: (item.value.port | default(0) | int) in _alloy_listening_ports
+         }) }}
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: alloy_detection_method == 'port'
+
+- name: Detect services (any method)
+  ansible.builtin.set_fact:
+    _alloy_detected: >-
+      {{ _alloy_detected | default({}) | combine({
+           item.key: ((item.value.systemd_names | intersect(ansible_facts.services.keys() | list)
+                       | map('extract', ansible_facts.services)
+                       | selectattr('state', 'eq', 'running') | list) | length > 0)
+                     or ((item.value.port | default(0) | int) in _alloy_listening_ports)
+         }) }}
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: alloy_detection_method == 'any'
+
+- name: Show service detection results
+  ansible.builtin.debug:
+    var: _alloy_detected
+
+- name: Detect custom services (service-based)
+  ansible.builtin.set_fact:
+    _alloy_custom_detected: >-
+      {{ _alloy_custom_detected | default({}) | combine({
+           item.key: ((item.key + '.service') in ansible_facts.services)
+                     and (ansible_facts.services[item.key + '.service'].state == 'running')
+         }) }}
+  loop: "{{ alloy_custom_services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - alloy_custom_services | length > 0
+    - alloy_detection_method == 'service'
+
+- name: Detect custom services (port-based)
+  ansible.builtin.set_fact:
+    _alloy_custom_detected: >-
+      {{ _alloy_custom_detected | default({}) | combine({
+           item.key: (item.value | int) in _alloy_listening_ports
+         }) }}
+  loop: "{{ alloy_custom_services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - alloy_custom_services | length > 0
+    - alloy_detection_method == 'port'
+
+- name: Detect custom services (any method)
+  ansible.builtin.set_fact:
+    _alloy_custom_detected: >-
+      {{ _alloy_custom_detected | default({}) | combine({
+           item.key: (((item.key + '.service') in ansible_facts.services)
+                      and (ansible_facts.services[item.key + '.service'].state == 'running'))
+                     or ((item.value | int) in _alloy_listening_ports)
+         }) }}
+  loop: "{{ alloy_custom_services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - alloy_custom_services | length > 0
+    - alloy_detection_method == 'any'
+
+- name: Show custom service detection results
+  ansible.builtin.debug:
+    var: _alloy_custom_detected
+  when: alloy_custom_services | length > 0

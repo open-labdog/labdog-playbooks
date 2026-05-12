@@ -1,0 +1,22 @@
+---
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start Alloy service
+  ansible.builtin.systemd:
+    name: alloy
+    state: started
+    enabled: true
+
+- name: Wait for Alloy HTTP endpoint to become available
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 12345
+    timeout: 10
+
+- name: Verify Alloy service is active
+  ansible.builtin.command: systemctl is-active alloy
+  changed_when: false
+  register: _alloy_active
+  failed_when: _alloy_active.stdout != "active"
