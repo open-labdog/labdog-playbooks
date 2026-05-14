@@ -6,21 +6,28 @@ cluster, one node at a time. Control-plane nodes are upgraded first
 rest), then workers. Apt-only — Debian / Ubuntu hosts.
 
 LabDog operators surface this as the **Upgrade Kubernetes cluster**
-action on the group view. It is a **cluster-mode** action: LabDog
-dispatches one Ansible run per group with a multi-host inventory
-shaped under `all.children.{control_plane,workers}`. The operator
-assigns the `control_plane` / `workers` role to each member from the
-group's Members tab in the UI.
+action on the group view. The action's manifest declares
+`supports_host: false`, which tells LabDog to dispatch the playbook
+once against the whole group (a flat `all` Ansible inventory) instead
+of fanning out per-host. The playbook itself decides which nodes are
+control-plane and which are workers — there are no roles to assign in
+the LabDog UI.
 
 ## What it does
 
-1. **Validates prerequisites** on the first control-plane node:
+1. **Discovers cluster topology**: probes every node for
+   `/etc/kubernetes/manifests/kube-apiserver.yaml`. Nodes that have
+   it are control-plane; nodes that don't are workers. Uses
+   `add_host` to build the in-memory `k8s_control_plane` and
+   `k8s_worker` groups for the rest of the playbook. Refuses if no
+   control-plane node is detected.
+2. **Validates prerequisites** on the first control-plane node:
    `target_version` looks like a semver, `kubectl` is on `PATH`, and
    every Ansible inventory hostname matches an existing Kubernetes
    node name.
-2. **Upgrades control-plane nodes serially** (`serial: 1`) via the
+3. **Upgrades control-plane nodes serially** (`serial: 1`) via the
    `kubernetes-upgrade` role with `node_role=control_plane`.
-3. **Upgrades worker nodes serially** (`serial: 1`) via the same role
+4. **Upgrades worker nodes serially** (`serial: 1`) via the same role
    with `node_role=worker`.
 
 The playbook never upgrades two nodes concurrently — Kubernetes
@@ -40,13 +47,19 @@ See [`manifest.yml`](./manifest.yml).
 
 ## Targeting
 
-- `supports_group: true`, `supports_host: false` — runs against a
-  whole group, never a single host.
-- `execution_mode: cluster` — single Ansible invocation per run, not
-  the per-host fan-out used by the other actions in this pack.
-- `destructive: true` — when the group's hosts have a Proxmox VM
-  mapping, LabDog snapshots before the run and rolls back on verify
-  failure.
+- `supports_group: true`, `supports_host: false` — the group flag
+  exposes the action on the group view; the host flag, set to false,
+  tells LabDog to dispatch the playbook in a single ansible-playbook
+  invocation against all members (instead of the per-host fan-out the
+  other actions in this pack use). Cluster-wide coordination
+  (`serial:`, `add_host`, `delegate_to`, `run_once`) lives entirely
+  inside this playbook — LabDog's involvement ends at "give the
+  playbook a flat inventory of every host in the group."
+- `destructive: true` — multi-node coordination is the playbook's
+  responsibility; LabDog does **not** wrap group-dispatched runs in
+  per-host snapshot/verify/rollback (the per-node snapshot wouldn't
+  compose cleanly with a kubeadm rolling upgrade). The drain →
+  uncordon → wait-Ready cycle in the role is the safety story.
 
 ## Requirements
 
