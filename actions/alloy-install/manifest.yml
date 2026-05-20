@@ -46,3 +46,17 @@ parameters:
     type: bool
     default: true
     help_text: Detect Docker / MySQL / PostgreSQL via systemd + listening ports and deploy matching scrape configs.
+
+# After a successful run, register the package + service so labdog
+# manages them going forward (drift checks notice them, Host detail
+# tabs reflect them, future syncs keep them in their declared state).
+# Skipped silently if the operator has already declared either row
+# for the host (operator intent wins).
+post_run_register:
+  packages:
+    - package_name: alloy
+      state: present
+  services:
+    - service_name: alloy.service
+      state: running
+      enabled: true
