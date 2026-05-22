@@ -1,0 +1,59 @@
+---
+# Verify playbook for the 'example' action.
+#
+# LabDog runs this after the main playbook completes. Any task failure
+# here marks verify as failed and (because destructive: true) triggers
+# automatic snapshot rollback — the host is restored to its pre-run state.
+#
+# This file is also safe to run standalone for debugging:
+#   ansible-playbook verify.yml -i <inventory> -e marker_dir=/var/lib/labdog-example
+
+- name: Verify — example system probe
+  hosts: all
+  become: true
+
+  vars:
+    marker_dir: /var/lib/labdog-example
+
+  tasks:
+    - name: Check probe marker exists
+      ansible.builtin.stat:
+        path: "{{ marker_dir }}/last-run"
+      register: probe_marker
+
+    - name: Assert probe marker was written
+      ansible.builtin.assert:
+        that: probe_marker.stat.exists
+        fail_msg: >-
+          Probe marker '{{ marker_dir }}/last-run' is missing on
+          {{ inventory_hostname }}. The main playbook did not complete
+          successfully.
+
+    - name: Read probe marker
+      ansible.builtin.slurp:
+        src: "{{ marker_dir }}/last-run"
+      register: marker_content
+
+    - name: Show probe marker contents
+      ansible.builtin.debug:
+        msg: "{{ marker_content.content | b64decode }}"
+
+    - name: Check for fail sentinel
+      ansible.builtin.stat:
+        path: "{{ marker_dir }}/fail-sentinel"
+      register: fail_sentinel
+
+    - name: Fail if intentional-failure sentinel is present
+      ansible.builtin.assert:
+        that: not fail_sentinel.stat.exists
+        fail_msg: >-
+          Intentional failure sentinel found at
+          '{{ marker_dir }}/fail-sentinel'. Verify is deliberately
+          failing to trigger snapshot rollback. This is expected when
+          fail_verify=true — the host will be restored to its
+          pre-run snapshot automatically.
+
+    - name: Verify host is SSH-reachable (implicit — task ran means yes)
+      ansible.builtin.debug:
+        msg: >-
+          SSH connectivity confirmed. Verify passed on {{ inventory_hostname }}.

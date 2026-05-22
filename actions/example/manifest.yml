@@ -1,0 +1,35 @@
+key: example
+name: Example / System Probe
+description: >-
+  Collects system facts, writes a timestamped probe marker to the host,
+  and verifies it is healthy after the run. Use this to exercise the full
+  LabDog lifecycle — Proxmox snapshot → run → verify → auto-rollback —
+  without making any production change.
+
+  Set `fail_verify` to intentionally make verify fail and watch the
+  snapshot rollback fire.
+icon: FlaskConical
+playbook: playbook.yml
+version: "1.0"
+estimated_duration: "< 1 min"
+destructive: true
+supports_host: true
+supports_group: true
+verify_playbook: verify.yml
+verify_timeout_seconds: 60
+parameters:
+  - key: marker_dir
+    label: Marker directory
+    type: string
+    default: /var/lib/labdog-example
+    help_text: >-
+      Directory where the probe marker file is written.
+      The directory is created if it does not exist.
+  - key: fail_verify
+    label: Intentionally fail verify
+    type: bool
+    default: false
+    help_text: >-
+      When true, write a marker that causes verify to fail.
+      The host will be rolled back to its pre-run snapshot.
+      Use this to confirm snapshot rollback is working correctly.
