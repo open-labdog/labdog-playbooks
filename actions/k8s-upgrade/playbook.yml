@@ -49,7 +49,7 @@
           (looked for /etc/kubernetes/manifests/kube-apiserver.yaml).
           Verify the targeted LabDog group contains every node of the
           cluster, including at least one control-plane node.
-      run_once: true
+      run_once: true  # noqa: run-once
 
 - name: Validate cluster prerequisites
   hosts: k8s_control_plane[0]
