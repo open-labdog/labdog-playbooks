@@ -14,6 +14,7 @@
 
   vars:
     marker_dir: /var/lib/labdog-example
+    ansible_python_interpreter: auto_silent
 
   tasks:
     - name: Check probe marker exists

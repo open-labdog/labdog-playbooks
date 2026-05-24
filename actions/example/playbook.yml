@@ -6,6 +6,7 @@
   vars:
     marker_dir: /var/lib/labdog-example
     fail_verify: false
+    ansible_python_interpreter: auto_silent
 
   tasks:
     - name: Gather system facts
@@ -27,13 +28,13 @@
       ansible.builtin.copy:
         dest: "{{ marker_dir }}/last-run"
         content: |
-          run_at={{ ansible_date_time.iso8601 }}
+          run_at={{ ansible_facts['date_time'].iso8601 }}
           host={{ inventory_hostname }}
-          os={{ ansible_distribution }} {{ ansible_distribution_version }}
-          kernel={{ ansible_kernel }}
-          arch={{ ansible_architecture }}
-          total_mem_mb={{ (ansible_memtotal_mb | int) }}
-          cpu_count={{ ansible_processor_vcpus }}
+          os={{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+          kernel={{ ansible_facts['kernel'] }}
+          arch={{ ansible_facts['architecture'] }}
+          total_mem_mb={{ (ansible_facts['memtotal_mb'] | int) }}
+          cpu_count={{ ansible_facts['processor_vcpus'] }}
           fail_verify={{ fail_verify | bool }}
         mode: "0644"
 
@@ -41,8 +42,8 @@
       ansible.builtin.debug:
         msg: >-
           Probe written to {{ marker_dir }}/last-run on {{ inventory_hostname }}
-          ({{ ansible_distribution }} {{ ansible_distribution_version }},
-          {{ ansible_processor_vcpus }} vCPU, {{ ansible_memtotal_mb }}MB RAM).
+          ({{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }},
+          {{ ansible_facts['processor_vcpus'] }} vCPU, {{ ansible_facts['memtotal_mb'] }}MB RAM).
           fail_verify={{ fail_verify | bool }}.
 
     # Write a sentinel file when fail_verify is set. The verify playbook
@@ -53,7 +54,7 @@
       ansible.builtin.copy:
         dest: "{{ marker_dir }}/fail-sentinel"
         content: |
-          Intentional verify failure requested at {{ ansible_date_time.iso8601 }}.
+          Intentional verify failure requested at {{ ansible_facts['date_time'].iso8601 }}.
           LabDog should roll this host back to its pre-run snapshot.
         mode: "0644"
       when: fail_verify | bool
