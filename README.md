@@ -2,13 +2,15 @@
 
 Default action pack for [LabDog](https://github.com/open-labdog/labdog).
 
-LabDog admins add this repo as an action pack through the UI
-(**Integrations → Action Packs → Add Pack**). Playbooks here override
-the bundled pack inside the LabDog image and are themselves overridable
-by additional user packs — pack precedence is managed by drag-to-
-reorder on the **Action Packs** page (top wins).
+LabDog admins add this repo as an action pack through the UI. The
+recommended path is **Integrations → Git Repos → Add Repository** —
+the onboarding wizard clones the repo, detects every pack, and
+prompts for per-key winner decisions if any keys overlap with existing
+packs. For a quick one-off, **Integrations → Action Packs → Add Pack**
+works too. Packs are unordered; action-key collisions are resolved per
+key via the Action Registry on the **Action Packs** page.
 
-For the full user-facing guide — how packs load, how collisions
+For the full user-facing guide — how packs load, how key collisions
 resolve, how to write your own — see
 [`docs/ui/actions.md`](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md)
 in the main labdog repo. This README covers the pack-author angle only.
@@ -48,12 +50,12 @@ that are genuinely shared across actions — LabDog adds it to
 
 ## Actions in this pack
 
-| Action | Targets | Mode | Summary |
-|---|---|---|---|
-| [`alloy-install`](./actions/alloy-install/) | host, group | per-host | Install and configure Grafana Alloy on Debian/Ubuntu hosts; ships metrics + logs to Prometheus and Loki with optional service auto-detection. |
-| [`k8s-upgrade`](./actions/k8s-upgrade/) | group | cluster | Drain, `kubeadm`-upgrade, and re-admit each node serially across the `control_plane` and `workers` groups. Apt-only. |
-| [`linux-upgrade`](./actions/linux-upgrade/) | host, group | per-host | `apt upgrade` all packages and reboot if `/var/run/reboot-required` is set. Uses `verify/post-upgrade.yml` as the success gate. |
-| [`linux-os-upgrade`](./actions/linux-os-upgrade/) | host, group | per-host | Major-release distribution upgrade (e.g. Debian 12→13, Ubuntu 22.04→24.04) via `apt dist-upgrade`. |
+| Action | Targets | Summary |
+|---|---|---|
+| [`alloy-install`](./actions/alloy-install/) | host, group | Install and configure Grafana Alloy on Debian/Ubuntu hosts; ships metrics + logs to Prometheus and Loki with optional service auto-detection. Registers `alloy` package and `alloy.service` via `post_run_register` so LabDog manages them going forward. |
+| [`k8s-upgrade`](./actions/k8s-upgrade/) | group only | Drain, `kubeadm`-upgrade, and re-admit each node serially across the `control_plane` and `workers` groups. Apt-only. |
+| [`linux-upgrade`](./actions/linux-upgrade/) | host, group | `apt upgrade` all packages and reboot if `/var/run/reboot-required` is set. Uses `verify/post-upgrade.yml` as the success gate. |
+| [`linux-os-upgrade`](./actions/linux-os-upgrade/) | host, group | Major-release distribution upgrade (e.g. Debian 12→13, Ubuntu 22.04→24.04) via `apt dist-upgrade`. |
 
 Each action ships its own README under `actions/<key>/` covering
 parameters, prerequisites, and customization points.
@@ -72,11 +74,9 @@ destructive: true                  # enables snapshot/verify/rollback when
                                    # the host has a Proxmox VM mapping
 supports_group: true               # can target a group of hosts?
 supports_host: true                # can target a single host?
-execution_mode: per_host           # per_host (default) or cluster.
-                                   # cluster = single ansible run against
-                                   # the whole group with a multi-host
-                                   # inventory; see "Cluster-mode actions"
-                                   # below.
+supports_fleet: false              # can target every host? conservative
+                                   # default; flip only for drift-check
+                                   # style actions
 verify_playbook: ../../verify/post-upgrade.yml   # (optional) pack-supplied
 verify_timeout_seconds: 180                   # verify hook; replaces the
                                               # built-in SSH/services/
@@ -89,6 +89,11 @@ parameters:                        # passed as --extra-vars at runtime
     default: true
     required: false
     help_text: Optional tooltip shown below the input.
+  - key: severity
+    label: Severity
+    type: choice
+    choices: ["low", "medium", "high"]   # required when type: choice
+    default: low
 ```
 
 Full manifest field reference and edge cases:
@@ -131,12 +136,12 @@ Either:
 - **Git sync flow** — push your branch somewhere LabDog can reach,
   add a GitRepository under **Integrations → Git Repos** with any
   credentials the repo needs, then add an Action Pack pointing at
-  that repo. New packs land at the top of the precedence list; drag
-  to reorder.
-- **Local filesystem flow** — add a pack via the UI with
-  `source_type = local` and point `repo_url` at the absolute path of
-  your working copy. No clone happens; LabDog reads manifests in
-  place. Fastest iteration loop.
+  that repo. Uncontested keys win automatically; contested keys need
+  a per-key pin via the Action Registry.
+- **Local filesystem flow** — go to **Action Packs → Add Pack**,
+  set source to **Local directory**, and fill in the **Filesystem
+  path** field with the absolute path of your working copy. No clone
+  happens; LabDog reads manifests in place. Fastest iteration loop.
 
 After either, hit **Sync** (UI) or `POST /api/action-packs/{id}/sync`
 and the action will appear. `GET /api/actions/` lists every resolved
@@ -144,10 +149,9 @@ action along with its winning pack name and override history.
 
 ## Playbook conventions
 
-- `hosts: all` — for per-host actions LabDog generates a single-host
-  inventory per run. Cluster-mode actions get a multi-host inventory
-  shaped under ``all.children.{control_plane,workers}``; see the
-  Cluster-mode actions section below.
+- `hosts: all` — LabDog generates a single-host inventory for per-host
+  runs, or a flat multi-host inventory for group-dispatch actions
+  (`supports_host: false`). Either way `hosts: all` matches.
 - `become: true` when you need root.
 - Parameters arrive as top-level Ansible variables from `--extra-vars`.
 - `ansible_check_mode=true` is set on dry runs — respect it if the
@@ -158,55 +162,49 @@ action along with its winning pack name and override history.
 
 ## Precedence recap
 
-Packs layer in a single linear ordering on the **Action Packs** page.
-The pack at the top of the list wins on action-key collisions; bundled
-sits implicitly at the bottom (no DB row).
+Packs are **unordered**. Each action key in the registry has exactly
+one winning pack. The resolution rules are:
 
-```
-my-local-pack         (top of list — highest position)
-    └── overrides →
-my-team-overrides
-    └── overrides →
-labdog-playbooks
-    └── overrides →
-bundled (image-baked, implicit position 0)
-```
+| Case | What happens |
+|---|---|
+| **Uncontested** — one pack declares the key | That pack wins automatically. |
+| **Contested + pinned** — multiple packs declare the key, operator chose a winner | The pinned pack wins. Status shown as **Pinned** (or **Frozen** for auto-pins awaiting confirmation). |
+| **Contested + unresolved** — multiple packs declare the key, no pin yet | Action is *unrunnable*. The Run button is disabled; the row is amber-tinted in the Action Registry with a "Pick winner" prompt. |
 
-Same action key → highest-positioned pack wins, shadowed packs still
-tracked for provenance (shown as amber badge in the UI). Different
-keys → both coexist in the registry. Operators reorder packs by
-drag-and-drop; per-key pins are also available from the conflict
-banner at the top of the page.
+To resolve a conflict, open **Integrations → Action Packs**. The
+**Action Registry** table shows every key — click a contested row to
+expand an inline radio group listing every candidate pack, then save.
+The **Make winner for all keys** button on a pack's row in the **Pack
+Sources** table bulk-pins every key that pack contributes.
 
-## Cluster-mode actions
+The bundled pack appears as a read-only row in Pack Sources (no Sync /
+Edit / Delete). It can be overridden for any key by adding a pack that
+declares the same key and pinning it as winner.
 
-Actions whose manifest declares ``execution_mode: cluster`` are
-dispatched as a single ``ansible-playbook`` invocation against a
-multi-host inventory (rather than the per-host fan-out used for
-``per_host`` actions). The bundled
-[`actions/k8s-upgrade/`](./actions/k8s-upgrade) is the canonical
-example — it drains, ``kubeadm``-upgrades, and re-admits each node
-serially via Ansible's own ``serial:`` keyword across the
-``control_plane`` and ``workers`` groups.
+## Group-dispatch actions
 
-For a cluster-mode pack:
+Most actions fan out per-host: LabDog generates one single-host
+inventory per target and dispatches one Celery task per host. Some
+actions need all hosts visible to a single ``ansible-playbook``
+invocation — for example, `k8s-upgrade` must drain one node, upgrade
+it, wait for it to re-join, then move to the next.
 
-- Set ``execution_mode: cluster`` plus ``supports_host: false`` and
-  ``supports_group: true`` in the manifest.
-- Multi-play orchestration goes in `playbook.yml` itself (one file
-  with multiple plays). The play layer does the orchestration with
-  ``serial:``, ``hosts:``, ``delegate_to:``. LabDog hands you a
-  ``control_plane`` and ``workers`` group in the inventory; the
-  operator assigns the role on each member from the group's Members
-  tab.
-- Cluster-wide ``kubectl`` tasks are easy: ``delegate_to:
-  "{{ groups['control_plane'] | first }}"`` so the playbook doesn't
-  need a kubeconfig on every node.
+To write a group-dispatch action:
 
-The k8s-upgrade role under
-[`actions/k8s-upgrade/roles/kubernetes-upgrade/`](./actions/k8s-upgrade/roles/kubernetes-upgrade/)
-is a good template — it's apt-only today; RHEL support is on the
-LabDog roadmap.
+- Set ``supports_host: false`` and ``supports_group: true`` in the
+  manifest. LabDog will only show the action on group views.
+- The playbook receives a flat multi-host inventory. Use Ansible's
+  ``serial:``, ``delegate_to:``, and ``run_once:`` primitives to
+  control ordering across hosts. LabDog does not inject any special
+  group structure — the playbook is responsible for its own
+  orchestration.
+- Cluster-wide ``kubectl`` calls can delegate to a single control-
+  plane node: ``delegate_to: "{{ groups['all'] | first }}"``.
+
+The [`actions/k8s-upgrade/`](./actions/k8s-upgrade) action is the
+reference implementation — it discovers which hosts are control-plane
+vs worker nodes in a setup play, then upgrades them serially. It is
+apt-only today; RHEL support is on the LabDog roadmap.
 
 ## Examples
 
