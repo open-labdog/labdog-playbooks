@@ -34,6 +34,11 @@
     # Optional list of package names that must be installed. Empty =
     # skip the package enumeration entirely.
     expected_packages: []
+    # Systemd units whose 'failed' state should be tolerated (e.g. a host
+    # with a known-broken chronyd that predates this run). Accepts a real
+    # list or a comma-separated string (as passed from the manifest UI).
+    # Match is on the full unit name, e.g. 'chronyd.service'.
+    ignore_failed_units: []
   tasks:
     - name: SSH round-trip
       ansible.builtin.ping:
@@ -67,19 +72,32 @@
     - name: Collect systemd unit states
       ansible.builtin.service_facts:
 
-    - name: Assert no systemd unit is in 'failed' state
-      ansible.builtin.assert:
-        that: >-
-          (ansible_facts.services.values()
-            | selectattr('state', 'defined')
-            | selectattr('state', 'equalto', 'failed')
-            | list | length) == 0
-        fail_msg: >-
-          One or more systemd units are failed:
+    - name: Compute failed units not covered by the ignore allowlist
+      ansible.builtin.set_fact:
+        _ignored_failed_units: >-
+          {{ (ignore_failed_units
+                if (ignore_failed_units is sequence and ignore_failed_units is not string)
+                else ignore_failed_units | string | split(','))
+             | map('trim') | reject('equalto', '') | list }}
+        _failed_units: >-
           {{ ansible_facts.services.values()
              | selectattr('state', 'defined')
              | selectattr('state', 'equalto', 'failed')
              | map(attribute='name') | list }}
+
+    - name: Determine offending failed units
+      ansible.builtin.set_fact:
+        _offending_failed_units: >-
+          {{ _failed_units | reject('in', _ignored_failed_units) | list }}
+
+    - name: Assert no unexpected systemd unit is in 'failed' state
+      ansible.builtin.assert:
+        that: _offending_failed_units | length == 0
+        fail_msg: >-
+          One or more systemd units are failed: {{ _offending_failed_units }}
+        success_msg: >-
+          No unexpected failed units (tolerated:
+          {{ _ignored_failed_units | join(', ') or 'none' }})
 
     - name: Assert each expected service is active
       ansible.builtin.systemd_service:

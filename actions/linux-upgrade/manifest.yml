@@ -29,3 +29,11 @@ parameters:
     label: Remove unused packages
     type: bool
     default: true
+  - key: ignore_failed_units
+    label: Tolerated failed units
+    type: string
+    default: ""
+    help_text: >-
+      Comma-separated systemd unit names whose pre-existing 'failed' state
+      should not fail verification (e.g. chronyd.service). Use full unit
+      names. Leave blank to fail on any failed unit.
