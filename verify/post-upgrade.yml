@@ -26,6 +26,12 @@
   vars:
     # Fail the verify if 1-minute load exceeds this.
     load_warn_threshold: 10.0
+    # A package upgrade (apt + autoremove) transiently spikes load, and
+    # verify runs immediately after. Re-sample the 1-min average a few
+    # times so a settling spike doesn't trigger a false rollback of an
+    # otherwise-successful upgrade. Total settle budget = retries * delay.
+    load_check_retries: 6
+    load_check_delay: 10
     # Fail the verify if / is fuller than this percentage.
     disk_warn_threshold_pct: 95
     # Optional list of systemd units that must be 'active'. Empty =
@@ -43,17 +49,24 @@
     - name: SSH round-trip
       ansible.builtin.ping:
 
-    - name: Read 1-minute load average
+    - name: Read 1-minute load average (re-sample until it settles)
       ansible.builtin.shell: awk '{print $1}' /proc/loadavg
       register: loadavg
       changed_when: false
+      until: (loadavg.stdout | float) < (load_warn_threshold | float)
+      retries: "{{ load_check_retries | int }}"
+      delay: "{{ load_check_delay | int }}"
+      # Don't error out of the retry loop — let the assert below own the
+      # pass/fail decision so its fail_msg is what surfaces to the operator.
+      failed_when: false
 
     - name: Assert load is below threshold
       ansible.builtin.assert:
         that: (loadavg.stdout | float) < (load_warn_threshold | float)
         fail_msg: >-
-          1-min load {{ loadavg.stdout }} exceeds threshold
-          {{ load_warn_threshold }}
+          1-min load {{ loadavg.stdout }} still exceeds threshold
+          {{ load_warn_threshold }} after {{ load_check_retries }} re-samples
+          ({{ load_check_retries | int * (load_check_delay | int) }}s settle)
 
     - name: Read root filesystem usage
       ansible.builtin.command: df -P /
