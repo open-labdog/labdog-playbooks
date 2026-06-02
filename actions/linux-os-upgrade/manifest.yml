@@ -10,6 +10,11 @@ estimated_duration: "20–45 min"
 destructive: true
 supports_group: true
 supports_host: true
+# Major-release upgrades are long and include a reboot, so they need far
+# more headroom than the global ansible.playbook_timeout default — more,
+# in fact, than that setting's own 3600s ceiling can express. Effective
+# timeout is max(this, the global setting).
+playbook_timeout_seconds: 5400
 parameters:
   - key: current_version
     label: Current codename

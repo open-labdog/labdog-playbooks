@@ -10,6 +10,11 @@ estimated_duration: "5–15 min"
 destructive: true
 supports_group: true
 supports_host: true
+# Floor for the main playbook's wall-clock budget. A real apt upgrade
+# easily outruns LabDog's short global ansible.playbook_timeout default,
+# which is what kills slow hosts mid-upgrade (and then rolls them back).
+# Effective timeout is max(this, the global setting).
+playbook_timeout_seconds: 1800
 # Post-run verify: SSH ping, load / disk thresholds, no systemd units
 # in 'failed' state. See ../../verify/README.md for the full template.
 verify_playbook: ../../verify/post-upgrade.yml
