@@ -1,0 +1,18 @@
+# ansible-lint configuration for the labdog-default action pack.
+#
+# CI runs `ansible-lint` over the whole pack (see .github/workflows/ci.yml).
+# This pack predates linting, so its pre-existing violations are handled
+# two ways:
+#
+#   * role-name — skipped outright below. Every role in this pack (and in
+#     labdog) is named `role-*` (hyphenated), which fails ansible-lint's
+#     `^[a-z][a-z0-9_]*$` pattern. This is a deliberate, repo-wide naming
+#     convention, not debt — so it is a permanent skip.
+#
+#   * everything else — baselined in `.ansible-lint-ignore` (a per-file,
+#     per-rule allowlist). Those rules STILL gate new violations elsewhere;
+#     only the specific pre-existing offenders are accepted. Clearing that
+#     file is tracked cleanup, intentionally kept out of the CI-bootstrap
+#     change so it doesn't touch working playbooks untested.
+skip_list:
+  - role-name

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Lets a newer push to a PR cancel an in-flight run for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-manifests:
+    name: Validate manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ActionManifest's validators import the full labdog backend
+      # (post_run_register pulls in app.actions.register_schemas -> DB
+      # models), so pydantic alone is not enough — install the backend.
+      # Pin LABDOG_REPO_REF to a release tag once labdog cuts them and bump
+      # it intentionally; until then track the default branch.
+      - name: Fetch labdog (manifest schema source)
+        run: git clone --depth 1 --branch "${LABDOG_REPO_REF:-main}" https://github.com/open-labdog/labdog.git _labdog_src
+        env:
+          LABDOG_REPO_REF: main
+
+      - name: Install labdog backend
+        run: |
+          python -m pip install -U pip -q
+          python -m pip install -e _labdog_src/backend -q
+
+      - name: Validate every manifest against ActionManifest
+        run: LABDOG_SRC=_labdog_src python scripts/validate_manifests.py
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-lint
+        run: python -m pip install -U pip "ansible-lint>=24" "ansible-core>=2.16" -q
+
+      # Whole-pack lint. Rule handling lives in .ansible-lint (permanent
+      # skips) and .ansible-lint-ignore (per-file baseline of pre-existing
+      # violations). New violations outside that baseline fail the job.
+      - name: ansible-lint
+        run: ansible-lint
