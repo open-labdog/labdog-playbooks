@@ -1,11 +1,11 @@
 key: alloy-install
 name: Install Alloy agent
 description: >-
-  Installs and configures Grafana Alloy on Debian/Ubuntu hosts. Ships
-  metrics to Prometheus and logs to Loki, with optional auto-detection
-  of common services (Docker, MySQL, PostgreSQL) and group-based config
-  layering. Idempotent — re-running converges; set "Config only" to
-  refresh config without touching the package.
+  Installs and configures Grafana Alloy on Debian/Ubuntu hosts for basic
+  monitoring: node metrics to Prometheus/Mimir and journal + file logs to
+  Loki, with optional Docker auto-detection and group-based config layering.
+  Idempotent — re-running converges; set "Config only" to refresh config
+  without touching the package.
 icon: Activity
 playbook: playbook.yml
 version: "1.0"
@@ -52,10 +52,10 @@ parameters:
     default: false
     help_text: Skip package install and only refresh /etc/alloy/conf.d/. Useful for config-only re-runs.
   - key: alloy_detect_services
-    label: Auto-detect services
+    label: Auto-detect Docker
     type: bool
     default: true
-    help_text: Detect Docker / MySQL / PostgreSQL via systemd + listening ports and deploy matching scrape configs.
+    help_text: Detect a running Docker daemon and deploy its container metrics + log scrape config.
 
 # After a successful run, register the package + service so labdog
 # manages them going forward (drift checks notice them, Host detail

@@ -1,9 +1,10 @@
 # alloy-install
 
 Installs and configures [Grafana Alloy](https://grafana.com/oss/alloy/) on
-Debian/Ubuntu hosts: ships metrics to Prometheus and logs to Loki, with
-optional auto-detection of common services (Docker, MySQL, PostgreSQL) and
-group-based config layering.
+Debian/Ubuntu hosts for **basic monitoring**: node metrics to
+Prometheus/Mimir and journal + file logs to Loki, with optional Docker
+auto-detection and group-based config layering. Anything more advanced
+(database exporters, app-specific scrapes) is left for you to add.
 
 LabDog operators surface this as the **Install Alloy agent** action on the
 host and group views. The manifest's UI-exposed parameters cover the common
@@ -19,8 +20,8 @@ is done by forking this pack and editing role defaults.
    pipeline.
 3. Layers in **group-based config** from `group_configs/<group>/` directories
    for every LabDog group the host belongs to (plus `all/` and `linux/`).
-4. Detects running services (Docker, MySQL, PostgreSQL via systemd + listening
-   ports) and deploys service-specific scrape jobs.
+4. Detects a running Docker daemon (systemd + listening ports) and deploys
+   its container metrics + log scrape config.
 5. Enables and starts the `alloy` systemd unit; reloads on config change.
 
 The action is **destructive** (mutates host state) and **idempotent** —
@@ -61,10 +62,7 @@ The pack ships these `.j2` templates at
 | `linux_node_metrics.alloy.j2` | `conf.d/linux_node_metrics.alloy` | `role-alloy-linux-configure` |
 | `linux_journal_logs.alloy.j2` | `conf.d/linux_journal_logs.alloy` | `role-alloy-linux-configure` |
 | `linux_file_logs.alloy.j2` | `conf.d/linux_file_logs.alloy` | `role-alloy-linux-configure` |
-| `service.alloy.j2` | per-service `conf.d/<service>.alloy` | `role-alloy-linux-services` |
 | `docker.alloy.j2` | `conf.d/docker.alloy` (when detected) | `role-alloy-linux-services` |
-| `mysql.alloy.j2` | `conf.d/mysql.alloy` (when detected) | `role-alloy-linux-services` |
-| `postgresql.alloy.j2` | `conf.d/postgresql.alloy` (when detected) | `role-alloy-linux-services` |
 
 ## Group-based configuration
 
@@ -99,24 +97,26 @@ See [`manifest.yml`](./manifest.yml). The UI-exposed parameters are:
 | `alloy_install_method` | choice | `repo` | `repo` (apt) or `local` (`.deb` file) |
 | `alloy_local_package_path` | string | `""` | Path on host when `install_method=local` |
 | `alloy_config_only` | bool | `false` | Skip install, refresh config only |
-| `alloy_detect_services` | bool | `true` | Auto-detect Docker/MySQL/Postgres |
+| `alloy_detect_services` | bool | `true` | Auto-detect a running Docker daemon |
 
 Tunables not exposed in the UI (edit role defaults to change) include:
-the alloy unix user/group, Mimir org ID, TLS skip-verify, service-data-source
-strings, and the `alloy_force_*` overrides. See each role's
-`defaults/main.yml` for the full list.
+the alloy unix user/group, Mimir org ID, TLS skip-verify, and the
+`alloy_force_docker` override. See each role's `defaults/main.yml` for the
+full list.
 
 ### LabDog integration
 
 The manifest declares a `metrics_backend` block, so when this action is run
-from **LabDog** the `alloy_prometheus_url` / `alloy_loki_url` /
-`alloy_mimir_org_id` values are filled automatically from LabDog's registered
-default Grafana instance (operator-supplied values still win). LabDog also
+from **LabDog** the `alloy_prometheus_url` / `alloy_mimir_org_id` are filled
+from LabDog's default **Mimir** instance and `alloy_loki_url` from its default
+**Loki** instance (operator-supplied values still win). LabDog also
 injects two identity vars per host — `labdog_host_id` and `labdog_hostname` —
-which the config stamps as `prometheus.remote_write` `external_labels` on
-every shipped series, so LabDog can query a host's metrics back on its host
-page. Outside LabDog these default to empty / `inventory_hostname` (Prometheus
-drops empty label values), so the pack still works standalone.
+which the config stamps on **both** metrics and logs: as
+`prometheus.remote_write` `external_labels` for metrics, and via a shared
+`loki.relabel "labdog"` that the base log sources forward through for logs.
+That lets LabDog query a host's data back on its host page. Outside LabDog
+these default to empty / `inventory_hostname` (relabel drops empty values),
+so the pack still works standalone.
 
 ## Requirements
 
@@ -135,8 +135,10 @@ To change behaviour for your fleet:
 1. **Tweak parameters**: change defaults in the relevant role's
    `defaults/main.yml`, or override per-action-run via manifest parameters.
 2. **Add a group_config template**: drop a new `<group>/<name>.alloy.j2` file.
-3. **Add a service to auto-detect**: extend `alloy_service_map` in
-   `role-alloy-linux-services/defaults/main.yml`.
+3. **Add a service to auto-detect**: add a `<service>.alloy.j2` template and
+   extend `alloy_service_map` in both `role-alloy-linux-detect` and
+   `role-alloy-linux-services` `defaults/main.yml` (this pack ships Docker
+   only — DB/app exporters are intentionally out of scope).
 4. **Override the whole action**: copy `actions/alloy-install/` into a
    higher-precedence pack and edit there — LabDog's pack overlay will pick
    it up.

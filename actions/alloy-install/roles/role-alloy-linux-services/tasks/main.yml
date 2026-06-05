@@ -1,6 +1,6 @@
 ---
-# _alloy_template_dir and _alloy_detected / _alloy_custom_detected facts are
-# set by role-alloy-configure and role-alloy-detect respectively, which run
+# _alloy_template_dir and _alloy_detected facts are set by
+# role-alloy-configure and role-alloy-detect respectively, which run
 # earlier in the same play.
 
 - name: Assert template directory fact is available
@@ -89,30 +89,4 @@
           (_alloy_detected | default({}))[item.key] | default(false)
         )
     )
-  notify: Restart alloy
-
-- name: Deploy custom service configuration
-  ansible.builtin.template:
-    src: "{{ _alloy_template_dir }}/service.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/{{ item.key }}.alloy"
-    owner: "{{ alloy_user }}"
-    group: "{{ alloy_group }}"
-    mode: "0640"
-  vars:
-    service_name: "{{ item.key }}"
-    service_port: "{{ item.value }}"
-  loop: "{{ alloy_custom_services | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  when: (_alloy_custom_detected | default({}))[item.key] | default(false)
-  notify: Restart alloy
-
-- name: Remove configuration for absent custom services
-  ansible.builtin.file:
-    path: "{{ alloy_confd_dir }}/{{ item.key }}.alloy"
-    state: absent
-  loop: "{{ alloy_custom_services | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  when: not ((_alloy_custom_detected | default({}))[item.key] | default(false))
   notify: Restart alloy

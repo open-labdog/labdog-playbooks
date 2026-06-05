@@ -15,5 +15,5 @@ local.file_match "file_logs" {
 
 loki.source.file "file_logs" {
   targets    = local.file_match.file_logs.targets
-  forward_to = [loki.write.default.receiver]
+  forward_to = [loki.relabel.labdog.receiver]
 }
