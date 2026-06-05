@@ -106,6 +106,18 @@ the alloy unix user/group, Mimir org ID, TLS skip-verify, service-data-source
 strings, and the `alloy_force_*` overrides. See each role's
 `defaults/main.yml` for the full list.
 
+### LabDog integration
+
+The manifest declares a `metrics_backend` block, so when this action is run
+from **LabDog** the `alloy_prometheus_url` / `alloy_loki_url` /
+`alloy_mimir_org_id` values are filled automatically from LabDog's registered
+default Grafana instance (operator-supplied values still win). LabDog also
+injects two identity vars per host — `labdog_host_id` and `labdog_hostname` —
+which the config stamps as `prometheus.remote_write` `external_labels` on
+every shipped series, so LabDog can query a host's metrics back on its host
+page. Outside LabDog these default to empty / `inventory_hostname` (Prometheus
+drops empty label values), so the pack still works standalone.
+
 ## Requirements
 
 - **OS**: Debian / Ubuntu (`ansible_os_family == "Debian"`)
