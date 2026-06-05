@@ -14,6 +14,16 @@ destructive: true
 supports_group: true
 supports_host: true
 
+# Tie into LabDog's Grafana integration: LabDog fills these playbook vars
+# from its registered default Grafana instance at dispatch (so the operator
+# doesn't re-type URLs), and always injects labdog_host_id / labdog_hostname
+# so the shipped metrics are queryable back on the host page. Operator-
+# supplied values still win over the injected URLs.
+metrics_backend:
+  prometheus_push_var: alloy_prometheus_url
+  loki_push_var: alloy_loki_url
+  org_id_var: alloy_mimir_org_id
+
 parameters:
   - key: alloy_prometheus_url
     label: Prometheus remote-write URL

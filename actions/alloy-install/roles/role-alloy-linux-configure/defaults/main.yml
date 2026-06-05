@@ -6,6 +6,14 @@ alloy_loki_url: "http://loki:3100/loki/api/v1/push"
 # Mimir tenant ID sent as X-Scope-OrgID header (required when multitenancy_enabled: true)
 alloy_mimir_org_id: "anonymous"
 
+# LabDog identity labels stamped on every shipped series (external_labels)
+# so LabDog can query a host's metrics back on its host page. LabDog injects
+# these at dispatch: labdog_host_id = the DB host id, labdog_hostname = the
+# host's name. Empty host id when Alloy is installed outside LabDog —
+# Prometheus drops empty label values, so nothing is added.
+labdog_host_id: ""
+labdog_hostname: "{{ inventory_hostname }}"
+
 # Skip TLS certificate verification for Prometheus and Loki endpoints
 alloy_tls_insecure_skip_verify: false
 

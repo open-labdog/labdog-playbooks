@@ -1,6 +1,15 @@
 // Managed by Ansible — do not edit manually
 
 prometheus.remote_write "default" {
+  // LabDog stamps every shipped series with the host's stable identity so
+  // it can query the metrics back on the host page. These are injected by
+  // LabDog at dispatch; when Alloy is installed outside LabDog they are
+  // empty strings, which Prometheus treats as absent (no labels added).
+  external_labels = {
+    labdog_host_id  = "{{ labdog_host_id | default('') }}",
+    labdog_hostname = "{{ labdog_hostname | default(inventory_hostname) }}",
+  }
+
   endpoint {
     url = "{{ alloy_prometheus_url }}"
 
