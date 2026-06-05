@@ -32,3 +32,23 @@ loki.write "default" {
     }
   }
 }
+
+// loki.write has no external_labels equivalent, so the host-identity labels
+// LabDog stamps on metrics (via prometheus.remote_write.external_labels) are
+// applied to logs here instead: base log sources forward to this relabel,
+// which adds the same labels and passes entries to loki.write.default. Empty
+// values (Alloy installed outside LabDog) are dropped by relabel, matching
+// the metrics behaviour.
+loki.relabel "labdog" {
+  forward_to = [loki.write.default.receiver]
+
+  rule {
+    target_label = "labdog_host_id"
+    replacement  = "{{ labdog_host_id | default('') }}"
+  }
+
+  rule {
+    target_label = "labdog_hostname"
+    replacement  = "{{ labdog_hostname | default(inventory_hostname) }}"
+  }
+}

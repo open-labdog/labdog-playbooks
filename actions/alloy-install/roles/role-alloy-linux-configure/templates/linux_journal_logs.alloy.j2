@@ -3,7 +3,7 @@
 loki.source.journal "journal_logs" {
   max_age       = "24h0m0s"
   relabel_rules = discovery.relabel.journal_logs.rules
-  forward_to    = [loki.write.default.receiver]
+  forward_to    = [loki.relabel.labdog.receiver]
 }
 
 discovery.relabel "journal_logs" {
