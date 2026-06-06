@@ -1,0 +1,33 @@
+name: Notify labdog
+
+# On every push to main, poke the labdog repo so it opens a PR bumping its
+# bundled-pack pin (LABDOG_PLAYBOOKS_REF) to this new HEAD. The labdog side
+# also runs on a daily schedule, so this is just the "appear immediately"
+# path — if the token below isn't configured, the bump still happens within
+# a day.
+#
+# Requires a repo secret LABDOG_DISPATCH_TOKEN: a PAT (classic: `repo`, or
+# fine-grained: Contents read/write on open-labdog/labdog) — the default
+# GITHUB_TOKEN cannot dispatch to another repository. Without it this
+# workflow no-ops (it does not fail the push).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch playbooks-updated to labdog
+        env:
+          GH_TOKEN: ${{ secrets.LABDOG_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "LABDOG_DISPATCH_TOKEN not set — skipping cross-repo dispatch."
+            echo "The labdog scheduled bump will still pick up this change within a day."
+            exit 0
+          fi
+          gh api repos/open-labdog/labdog/dispatches \
+            -f event_type=playbooks-updated
