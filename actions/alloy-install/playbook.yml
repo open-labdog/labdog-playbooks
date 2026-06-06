@@ -22,7 +22,7 @@
     - role: role-alloy-linux-install
       when: not alloy_config_only | default(false) | bool
 
-    # Deploy base configs + group-based configs.
+    # Deploy base configs.
     - role: role-alloy-linux-configure
 
     # Detect running services / listening ports.

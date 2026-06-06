@@ -19,9 +19,3 @@
   ansible.builtin.include_tasks: base_configs.yml
   tags:
     - configure
-
-- name: Deploy group-based configuration files
-  ansible.builtin.include_tasks: group_configs.yml
-  tags:
-    - configure
-    - group_configs
