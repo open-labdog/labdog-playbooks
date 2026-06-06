@@ -3,9 +3,9 @@ name: Install Alloy agent
 description: >-
   Installs and configures Grafana Alloy on Debian/Ubuntu hosts for basic
   monitoring: node metrics to Prometheus/Mimir and journal + file logs to
-  Loki, with optional Docker auto-detection and group-based config layering.
-  Idempotent — re-running converges; set "Config only" to refresh config
-  without touching the package.
+  Loki, with optional Docker auto-detection. Idempotent — re-running
+  converges; set "Config only" to refresh config without touching the
+  package.
 icon: Activity
 playbook: playbook.yml
 version: "1.0"

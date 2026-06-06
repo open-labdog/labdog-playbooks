@@ -3,8 +3,8 @@
 Installs and configures [Grafana Alloy](https://grafana.com/oss/alloy/) on
 Debian/Ubuntu hosts for **basic monitoring**: node metrics to
 Prometheus/Mimir and journal + file logs to Loki, with optional Docker
-auto-detection and group-based config layering. Anything more advanced
-(database exporters, app-specific scrapes) is left for you to add.
+auto-detection. Anything more advanced (database exporters, app-specific
+scrapes) is left for you to add.
 
 LabDog operators surface this as the **Install Alloy agent** action on the
 host and group views. The manifest's UI-exposed parameters cover the common
@@ -18,11 +18,9 @@ is done by forking this pack and editing role defaults.
 2. Renders a base set of `.alloy` config files under `/etc/alloy/conf.d/`:
    remote-write endpoints, label transforms, default scrape jobs, node-exporter
    pipeline.
-3. Layers in **group-based config** from `group_configs/<group>/` directories
-   for every LabDog group the host belongs to (plus `all/` and `linux/`).
-4. Detects a running Docker daemon (systemd + listening ports) and deploys
+3. Detects a running Docker daemon (systemd + listening ports) and deploys
    its container metrics + log scrape config.
-5. Enables and starts the `alloy` systemd unit; reloads on config change.
+4. Enables and starts the `alloy` systemd unit; reloads on config change.
 
 The action is **destructive** (mutates host state) and **idempotent** —
 re-running with the same parameters converges. Set `alloy_config_only: true`
@@ -38,7 +36,7 @@ stays readable.
 |---|---|
 | `role-alloy-linux-repo` | Add Grafana GPG key + APT repository |
 | `role-alloy-linux-install` | Install Alloy from repo or local `.deb` |
-| `role-alloy-linux-configure` | Render base + group_configs/ template files |
+| `role-alloy-linux-configure` | Render base config template files |
 | `role-alloy-linux-detect` | Detect running services / listening ports |
 | `role-alloy-linux-services` | Render service-specific scrape configs |
 | `role-alloy-linux-service` | Enable + start the `alloy` systemd unit |
@@ -63,28 +61,6 @@ The pack ships these `.j2` templates at
 | `linux_journal_logs.alloy.j2` | `conf.d/linux_journal_logs.alloy` | `role-alloy-linux-configure` |
 | `linux_file_logs.alloy.j2` | `conf.d/linux_file_logs.alloy` | `role-alloy-linux-configure` |
 | `docker.alloy.j2` | `conf.d/docker.alloy` (when detected) | `role-alloy-linux-services` |
-
-## Group-based configuration
-
-`group_configs/<group>/*.alloy.j2` files are rendered per host based on the
-groups it belongs to in the LabDog inventory.
-
-```
-group_configs/
-├── all/                  every host
-├── linux/                every host in the 'linux' parent group
-├── linux_databases/      hosts in the 'linux_databases' group
-├── linux_webservers/     hosts in the 'linux_webservers' group
-└── <your-group>/         hosts in <your-group>
-```
-
-Add a new group: drop a directory under `group_configs/` named after the
-LabDog group, fill it with `*.alloy.j2` templates, and re-run the action.
-Templates have access to host vars and the standard Ansible facts.
-
-The pack ships two example group templates: `linux_databases/slow_query_logs.alloy.j2`
-and `linux_webservers/nginx_metrics.alloy.j2`. Both are illustrative — copy,
-adapt, or remove as needed.
 
 ## Manifest parameters
 
@@ -134,7 +110,9 @@ To change behaviour for your fleet:
 
 1. **Tweak parameters**: change defaults in the relevant role's
    `defaults/main.yml`, or override per-action-run via manifest parameters.
-2. **Add a group_config template**: drop a new `<group>/<name>.alloy.j2` file.
+2. **Add a base config template**: drop a new `*.alloy.j2` under
+   `role-alloy-linux-configure/templates/` and a matching `template:` task in
+   `base_configs.yml`.
 3. **Add a service to auto-detect**: add a `<service>.alloy.j2` template and
    extend `alloy_service_map` in both `role-alloy-linux-detect` and
    `role-alloy-linux-services` `defaults/main.yml` (this pack ships Docker
