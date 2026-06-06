@@ -13,8 +13,8 @@ is done by forking this pack and editing role defaults.
 
 ## What it does
 
-1. Adds the Grafana APT repo and installs the `alloy` package (skipped when
-   installing from a local `.deb` or in config-only mode).
+1. Adds the Grafana APT repo and installs the `alloy` package (skipped in
+   config-only mode).
 2. Renders a base set of `.alloy` config files under `/etc/alloy/conf.d/`:
    remote-write endpoints, label transforms, default scrape jobs, node-exporter
    pipeline.
@@ -35,7 +35,7 @@ stays readable.
 | Role | Responsibility |
 |---|---|
 | `role-alloy-linux-repo` | Add Grafana GPG key + APT repository |
-| `role-alloy-linux-install` | Install Alloy from repo or local `.deb` |
+| `role-alloy-linux-install` | Install Alloy from the Grafana APT repo |
 | `role-alloy-linux-configure` | Render base config template files |
 | `role-alloy-linux-detect` | Detect running services / listening ports |
 | `role-alloy-linux-services` | Render service-specific scrape configs |
@@ -68,10 +68,8 @@ See [`manifest.yml`](./manifest.yml). The UI-exposed parameters are:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `alloy_prometheus_url` | string | required | Prometheus remote-write endpoint |
-| `alloy_loki_url` | string | required | Loki push endpoint |
-| `alloy_install_method` | choice | `repo` | `repo` (apt) or `local` (`.deb` file) |
-| `alloy_local_package_path` | string | `""` | Path on host when `install_method=local` |
+| `alloy_prometheus_url` | string | required | Mimir/Prometheus remote-write endpoint (selected from a registered Grafana integration in the UI) |
+| `alloy_loki_url` | string | required | Loki push endpoint (selected from a registered Grafana integration in the UI) |
 | `alloy_config_only` | bool | `false` | Skip install, refresh config only |
 | `alloy_detect_services` | bool | `true` | Auto-detect a running Docker daemon |
 

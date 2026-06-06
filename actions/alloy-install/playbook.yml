@@ -12,13 +12,11 @@
           distros are not yet supported by this pack.
 
   roles:
-    # Add Grafana APT repository — skipped for local package installs.
+    # Add Grafana APT repository — skipped in config-only mode.
     - role: role-alloy-linux-repo
-      when:
-        - not alloy_config_only | default(false) | bool
-        - alloy_install_method | default('repo') == "repo"
+      when: not alloy_config_only | default(false) | bool
 
-    # Install Alloy package (from repo or local file).
+    # Install the Alloy package from the Grafana APT repository.
     - role: role-alloy-linux-install
       when: not alloy_config_only | default(false) | bool
 

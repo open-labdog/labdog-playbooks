@@ -1,20 +1,5 @@
 ---
-- name: Validate local package path is set
-  ansible.builtin.assert:
-    that: alloy_local_package_path | length > 0
-    fail_msg: >-
-      alloy_install_method is 'local' but alloy_local_package_path is empty.
-      Provide the absolute path to a .deb or .rpm file on the Ansible controller.
-  when: alloy_install_method == "local"
-
 - name: Install via Grafana APT repository
   ansible.builtin.include_tasks: repo_install.yml
   tags:
     - install
-  when: alloy_install_method == "repo"
-
-- name: Install from local package file
-  ansible.builtin.include_tasks: local_install.yml
-  tags:
-    - install
-  when: alloy_install_method == "local"
