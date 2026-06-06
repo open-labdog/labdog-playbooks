@@ -26,26 +26,15 @@ metrics_backend:
 
 parameters:
   - key: alloy_prometheus_url
-    label: Prometheus remote-write URL
+    label: Prometheus/Mimir Write URL
     type: string
     required: true
-    help_text: Full URL including /api/v1/write — e.g. http://prometheus:9090/api/v1/write
+    help_text: Select a registered Mimir destination (configure under Integrations → Grafana).
   - key: alloy_loki_url
-    label: Loki push URL
+    label: Loki Write URL
     type: string
     required: true
-    help_text: Full URL including /loki/api/v1/push — e.g. http://loki:3100/loki/api/v1/push
-  - key: alloy_install_method
-    label: Install method
-    type: choice
-    choices: ["repo", "local"]
-    default: "repo"
-    help_text: "'repo' = apt from grafana.com; 'local' = .deb file already present on the host."
-  - key: alloy_local_package_path
-    label: Local .deb path
-    type: string
-    default: ""
-    help_text: Absolute path to the .deb on the target host. Only used when install method is 'local'.
+    help_text: Select a registered Loki destination (configure under Integrations → Grafana).
   - key: alloy_config_only
     label: Config only (skip install)
     type: bool

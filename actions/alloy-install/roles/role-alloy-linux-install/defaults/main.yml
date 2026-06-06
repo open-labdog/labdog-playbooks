@@ -1,18 +1,9 @@
 ---
-# Installation method:
-#   "repo"  - install from the Grafana APT repository (default)
-#   "local" - copy a package file from the Ansible controller and install it
-alloy_install_method: repo
-
-# Absolute path on the Ansible controller to a .deb or .rpm package file.
-# Required when alloy_install_method: local — ignored otherwise.
-alloy_local_package_path: ""
-
 # Config-only mode — skip installation, only deploy config files
 alloy_config_only: false
 
 # Set true to remove a locally installed (dpkg -i) Alloy before installing
-# from the Grafana APT repository. Only applies when alloy_install_method: repo.
+# from the Grafana APT repository.
 alloy_replace_local_install: false
 
 # Configuration directory — used when pre-writing /etc/default/alloy before
