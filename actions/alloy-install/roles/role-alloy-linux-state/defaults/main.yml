@@ -1,0 +1,18 @@
+---
+# Default config directory used for fresh installs and as the new directory
+# created when adopting a single-file install (scenario 2).
+alloy_confd_dir: /etc/alloy/conf.d
+
+# Environment file that carries Alloy's CONFIG_FILE pointer. This is the
+# source of truth for "where does Alloy read its config from".
+alloy_env_file: /etc/default/alloy
+
+# The Grafana deb's built-in default config path. Assumed as the current
+# target when the package is installed but the environment file is missing,
+# so adopt_file still preserves whatever the host was actually running.
+alloy_default_config_file: /etc/alloy/config.alloy
+
+# Marker file dropped inside a labdog-owned config directory. Its presence
+# tells a later re-run "this directory is mine" so we keep the unprefixed
+# fresh-install layout instead of treating it as an operator-owned dir.
+alloy_managed_marker: .labdog-managed

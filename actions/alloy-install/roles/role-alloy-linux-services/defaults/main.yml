@@ -1,5 +1,8 @@
 ---
 alloy_confd_dir: /etc/alloy/conf.d
+# Filename prefix for labdog's own config files; overridden at runtime by
+# role-alloy-linux-state when adopting an operator-owned config directory.
+alloy_config_prefix: ""
 alloy_user: alloy
 alloy_group: alloy
 
