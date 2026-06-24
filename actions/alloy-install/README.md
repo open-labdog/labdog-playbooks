@@ -83,7 +83,6 @@ The pack ships these `.j2` templates at
 
 | Template | Rendered to | Owner |
 |---|---|---|
-| `alloy-env.j2` | `/etc/default/alloy` | `role-alloy-linux-configure` |
 | `endpoints.alloy.j2` | `conf.d/endpoints.alloy` | `role-alloy-linux-configure` |
 | `alloy.alloy.j2` | `conf.d/alloy.alloy` | `role-alloy-linux-configure` |
 | `linux_node_metrics.alloy.j2` | `conf.d/linux_node_metrics.alloy` | `role-alloy-linux-configure` |

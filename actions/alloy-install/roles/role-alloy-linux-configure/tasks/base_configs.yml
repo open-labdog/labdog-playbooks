@@ -1,17 +1,8 @@
 ---
-# Only fresh installs own /etc/default/alloy outright. When adopting an
-# existing Alloy we must not clobber the operator's environment file —
-# adopt_file repoints CONFIG_FILE surgically (see main.yml), adopt_dir leaves
-# it untouched.
-- name: Configure Alloy environment file
-  ansible.builtin.template:
-    src: "{{ _alloy_template_dir }}/alloy-env.j2"
-    dest: /etc/default/alloy
-    owner: root
-    group: root
-    mode: "0644"
-  when: _alloy_mode == 'fresh'
-  notify: Restart alloy
+# /etc/default/alloy (the CONFIG_FILE pointer) is not managed here:
+#   * fresh      — pre-written before the package install by role-alloy-linux-install
+#   * adopt_file — CONFIG_FILE repointed surgically in main.yml (lineinfile)
+#   * adopt_dir  — left untouched (operator owns it)
 
 # labdog's own config files. In operator-owned directories (adopt_dir) they
 # carry the alloy_config_prefix (labdog_) so they never overwrite operator

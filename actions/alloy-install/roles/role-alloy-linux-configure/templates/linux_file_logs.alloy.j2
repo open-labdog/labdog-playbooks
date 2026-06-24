@@ -1,6 +1,6 @@
 // Managed by Ansible — do not edit manually
 
-local.file_match "file_logs" {
+local.file_match "labdog_file_logs" {
   path_targets = [{% for path in alloy_file_log_paths %}
 
     {
@@ -13,7 +13,7 @@ local.file_match "file_logs" {
   ]
 }
 
-loki.source.file "file_logs" {
-  targets    = local.file_match.file_logs.targets
+loki.source.file "labdog_file_logs" {
+  targets    = local.file_match.labdog_file_logs.targets
   forward_to = [loki.relabel.labdog.receiver]
 }

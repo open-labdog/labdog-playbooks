@@ -1,6 +1,6 @@
 // Managed by Ansible — do not edit manually
 
-prometheus.remote_write "default" {
+prometheus.remote_write "labdog" {
   // LabDog stamps every shipped series with the host's stable identity so
   // it can query the metrics back on the host page. These are injected by
   // LabDog at dispatch; when Alloy is installed outside LabDog they are
@@ -23,7 +23,7 @@ prometheus.remote_write "default" {
   }
 }
 
-loki.write "default" {
+loki.write "labdog" {
   endpoint {
     url = "{{ alloy_loki_url }}"
 
@@ -36,11 +36,11 @@ loki.write "default" {
 // loki.write has no external_labels equivalent, so the host-identity labels
 // LabDog stamps on metrics (via prometheus.remote_write.external_labels) are
 // applied to logs here instead: base log sources forward to this relabel,
-// which adds the same labels and passes entries to loki.write.default. Empty
+// which adds the same labels and passes entries to loki.write.labdog. Empty
 // values (Alloy installed outside LabDog) are dropped by relabel, matching
 // the metrics behaviour.
 loki.relabel "labdog" {
-  forward_to = [loki.write.default.receiver]
+  forward_to = [loki.write.labdog.receiver]
 
   rule {
     target_label = "labdog_host_id"

@@ -4,16 +4,16 @@
 // Metrics //
 /////////////
 
-prometheus.exporter.cadvisor "docker" {
+prometheus.exporter.cadvisor "labdog_docker" {
   docker_host = "unix:///var/run/docker.sock"
 }
 
-prometheus.scrape "docker" {
-  targets    = prometheus.exporter.cadvisor.docker.targets
-  forward_to = [prometheus.relabel.relabel_metrics.receiver]
+prometheus.scrape "labdog_docker" {
+  targets    = prometheus.exporter.cadvisor.labdog_docker.targets
+  forward_to = [prometheus.relabel.labdog_docker.receiver]
 }
 
-prometheus.relabel "relabel_metrics" {
+prometheus.relabel "labdog_docker" {
   rule {
       target_label = "job"
       replacement = "docker"
@@ -36,7 +36,7 @@ prometheus.relabel "relabel_metrics" {
   }
 
   forward_to = [
-    prometheus.remote_write.default.receiver,
+    prometheus.remote_write.labdog.receiver,
   ]
 }
 
@@ -44,12 +44,12 @@ prometheus.relabel "relabel_metrics" {
 /// Logs ///
 ////////////
 
-discovery.docker "docker" {
+discovery.docker "labdog_docker" {
   host = "unix:///var/run/docker.sock"
 }
 
-discovery.relabel "docker" {
-  targets = discovery.docker.docker.targets
+discovery.relabel "labdog_docker" {
+  targets = discovery.docker.labdog_docker.targets
 
   rule {
       target_label = "job"
@@ -73,9 +73,12 @@ discovery.relabel "docker" {
   }
 }
 
-loki.source.docker "default" {
+loki.source.docker "labdog_docker" {
   host          = "unix:///var/run/docker.sock"
-  targets       = discovery.docker.docker.targets
-  relabel_rules = discovery.relabel.docker.rules
-  forward_to    = [loki.write.default.receiver]
+  targets       = discovery.docker.labdog_docker.targets
+  relabel_rules = discovery.relabel.labdog_docker.rules
+  // Route through the shared labdog relabel so docker logs also carry the
+  // labdog_host_id / labdog_hostname identity labels before hitting
+  // loki.write.labdog.
+  forward_to    = [loki.relabel.labdog.receiver]
 }
