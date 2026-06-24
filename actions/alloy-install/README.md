@@ -13,33 +13,62 @@ is done by forking this pack and editing role defaults.
 
 ## What it does
 
-1. Adds the Grafana APT repo and installs the `alloy` package (skipped in
-   config-only mode).
-2. Renders a base set of `.alloy` config files under `/etc/alloy/conf.d/`:
-   remote-write endpoints, label transforms, default scrape jobs, node-exporter
-   pipeline.
-3. Detects a running Docker daemon (systemd + listening ports) and deploys
+1. Detects existing state and picks a mode (see **Install modes** below).
+2. On a fresh host, adds the Grafana APT repo and installs the `alloy`
+   package (skipped when adopting an existing install, or in config-only
+   mode).
+3. Renders a base set of `.alloy` config files into the active config
+   directory: remote-write endpoints, label transforms, default scrape jobs,
+   node-exporter pipeline.
+4. Detects a running Docker daemon (systemd + listening ports) and deploys
    its container metrics + log scrape config.
-4. Enables and starts the `alloy` systemd unit; reloads on config change.
+5. Enables and starts the `alloy` systemd unit; reloads (or restarts) on
+   config change.
 
 The action is **destructive** (mutates host state) and **idempotent** —
 re-running with the same parameters converges. Set `alloy_config_only: true`
 to skip install entirely and just refresh config.
 
+## Install modes
+
+`role-alloy-linux-state` runs first and inspects the host — is the `alloy`
+package present, and what does `CONFIG_FILE` in `/etc/default/alloy` point at?
+— then selects one of three modes automatically (no operator knob):
+
+| Mode | When | What happens |
+|---|---|---|
+| **fresh** | Package absent, **or** the config dir is already labdog-owned | Install + configure as before. labdog owns `/etc/alloy/conf.d/`; files use their bare names. |
+| **adopt_dir** | Package present and `CONFIG_FILE` is an operator-owned directory | labdog renders its configs **into that directory** with a `labdog_` filename prefix (so operator files are never overwritten) and **reloads** Alloy (SIGHUP, no downtime). |
+| **adopt_file** | Package present and `CONFIG_FILE` is a single file (or unset) | labdog creates `/etc/alloy/conf.d/`, **copies the operator's existing config file in** (left in place on disk as a backup), adds its own configs, repoints `CONFIG_FILE` at the directory, and **restarts** Alloy. |
+
+A labdog-owned directory is recognised by a `.labdog-managed` marker file (and,
+for hosts installed by an older version of this pack, by being exactly the
+default `/etc/alloy/conf.d` path). That keeps re-runs in **fresh** mode rather
+than re-adopting labdog's own directory and duplicating every file.
+
+Reload is used only in **adopt_dir** (and only if the unit defines an
+`ExecReload`); every other case — and any unit without reload support —
+restarts.
+
 ## Role architecture
 
-`playbook.yml` composes six single-purpose roles in order. Each role's
+`playbook.yml` composes seven single-purpose roles in order. Each role's
 `when:` guard is set in the playbook (not the role) so the orchestration
 stays readable.
 
 | Role | Responsibility |
 |---|---|
-| `role-alloy-linux-repo` | Add Grafana GPG key + APT repository |
-| `role-alloy-linux-install` | Install Alloy from the Grafana APT repo |
+| `role-alloy-linux-state` | Detect existing install + config layout; select fresh/adopt_dir/adopt_file mode |
+| `role-alloy-linux-repo` | Add Grafana GPG key + APT repository (fresh only) |
+| `role-alloy-linux-install` | Install Alloy from the Grafana APT repo (fresh only) |
 | `role-alloy-linux-configure` | Render base config template files |
 | `role-alloy-linux-detect` | Detect running services / listening ports |
 | `role-alloy-linux-services` | Render service-specific scrape configs |
 | `role-alloy-linux-service` | Enable + start the `alloy` systemd unit |
+
+`role-alloy-linux-state` exports the facts every later role keys off:
+`_alloy_mode`, the effective `alloy_confd_dir`, the `alloy_config_prefix`
+applied to labdog's filenames, and `_alloy_reload_only`.
 
 All roles are private to this action: they live under `roles/` next to
 `playbook.yml` and Ansible's playbook-adjacent role search picks them up

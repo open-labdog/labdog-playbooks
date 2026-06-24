@@ -1,6 +1,10 @@
 ---
+# Reload (SIGHUP, no downtime) when we only added files to an already-running
+# directory-mode Alloy and the unit supports reload; otherwise restart.
+# _alloy_reload_only is decided once in role-alloy-linux-state (it already
+# accounts for units without an ExecReload, which fall back to restart here).
 - name: Restart alloy
   ansible.builtin.systemd:
     name: alloy
-    state: restarted
+    state: "{{ 'reloaded' if (_alloy_reload_only | default(false) | bool) else 'restarted' }}"
     daemon_reload: true

@@ -12,13 +12,24 @@
           distros are not yet supported by this pack.
 
   roles:
-    # Add Grafana APT repository — skipped in config-only mode.
+    # Detect whether Alloy is already installed and how it loads config.
+    # Sets _alloy_mode (fresh | adopt_dir | adopt_file) plus the effective
+    # config dir / filename prefix / reload-only facts everything else keys
+    # off. Must run first.
+    - role: role-alloy-linux-state
+
+    # Add Grafana APT repository — only on a fresh install (skipped when
+    # adopting an existing Alloy, or in config-only mode).
     - role: role-alloy-linux-repo
-      when: not alloy_config_only | default(false) | bool
+      when:
+        - not alloy_config_only | default(false) | bool
+        - _alloy_mode == 'fresh'
 
     # Install the Alloy package from the Grafana APT repository.
     - role: role-alloy-linux-install
-      when: not alloy_config_only | default(false) | bool
+      when:
+        - not alloy_config_only | default(false) | bool
+        - _alloy_mode == 'fresh'
 
     # Deploy base configs.
     - role: role-alloy-linux-configure

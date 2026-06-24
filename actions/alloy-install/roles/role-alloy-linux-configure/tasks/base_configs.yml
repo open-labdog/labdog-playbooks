@@ -1,4 +1,8 @@
 ---
+# Only fresh installs own /etc/default/alloy outright. When adopting an
+# existing Alloy we must not clobber the operator's environment file —
+# adopt_file repoints CONFIG_FILE surgically (see main.yml), adopt_dir leaves
+# it untouched.
 - name: Configure Alloy environment file
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/alloy-env.j2"
@@ -6,12 +10,16 @@
     owner: root
     group: root
     mode: "0644"
+  when: _alloy_mode == 'fresh'
   notify: Restart alloy
 
+# labdog's own config files. In operator-owned directories (adopt_dir) they
+# carry the alloy_config_prefix (labdog_) so they never overwrite operator
+# files; in labdog-owned directories the prefix is empty.
 - name: Deploy endpoints configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/endpoints.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/endpoints.alloy"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}endpoints.alloy"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"
@@ -20,7 +28,7 @@
 - name: Deploy Linux node metrics configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/linux_node_metrics.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/linux_node_metrics.alloy"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}linux_node_metrics.alloy"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"
@@ -29,7 +37,7 @@
 - name: Deploy Alloy self-monitoring configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/alloy.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/alloy.alloy"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}alloy.alloy"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"
@@ -38,7 +46,7 @@
 - name: Deploy journal log collection configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/linux_journal_logs.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/linux_journal_logs.alloy"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}linux_journal_logs.alloy"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"
@@ -47,7 +55,7 @@
 - name: Deploy file log collection configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/linux_file_logs.alloy.j2"
-    dest: "{{ alloy_confd_dir }}/linux_file_logs.alloy"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}linux_file_logs.alloy"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"

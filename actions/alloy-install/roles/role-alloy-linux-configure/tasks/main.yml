@@ -5,13 +5,66 @@
   tags:
     - configure
 
-- name: Create configuration directory
+# --- Scenario 2 (adopt_file): switch a single-file install to directory mode.
+# Create labdog's directory, preserve the operator's existing config file by
+# copying it in untouched, then repoint CONFIG_FILE at the directory. The
+# original file is left on disk as a backup; the copy is what Alloy now loads.
+- name: Create labdog config directory (fresh / adopt_file)
   ansible.builtin.file:
     path: "{{ alloy_confd_dir }}"
     state: directory
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0755"
+  when: _alloy_mode != 'adopt_dir'
+  tags:
+    - configure
+
+- name: Preserve the operator's existing config file in the new directory
+  ansible.builtin.copy:
+    src: "{{ _alloy_current_config_target }}"
+    dest: "{{ alloy_confd_dir }}/{{ _alloy_current_config_target | basename }}"
+    remote_src: true
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+    force: false
+  when:
+    - _alloy_mode == 'adopt_file'
+    - _alloy_current_config_target | length > 0
+    - _alloy_target_stat.stat.exists | default(false)
+    - not (_alloy_target_stat.stat.isdir | default(false))
+  notify: Restart alloy
+  tags:
+    - configure
+
+- name: Point CONFIG_FILE at the directory (adopt_file)
+  ansible.builtin.lineinfile:
+    path: "{{ alloy_env_file }}"
+    regexp: '^\s*CONFIG_FILE\s*='
+    line: 'CONFIG_FILE="{{ alloy_confd_dir }}"'
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: _alloy_mode == 'adopt_file'
+  notify: Restart alloy
+  tags:
+    - configure
+
+# --- Labdog ownership marker. Dropped only in directories labdog owns (fresh /
+# adopt_file). Its presence makes a later re-run treat the directory as managed
+# and keep the unprefixed layout instead of re-adopting it as an operator dir.
+- name: Mark the labdog config directory as managed
+  ansible.builtin.copy:
+    dest: "{{ alloy_confd_dir }}/{{ alloy_managed_marker }}"
+    content: |
+      # This directory is managed by LabDog's alloy-install action.
+      # Files here are owned by the action; do not edit by hand.
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_group }}"
+    mode: "0640"
+  when: _alloy_mode != 'adopt_dir'
   tags:
     - configure
 

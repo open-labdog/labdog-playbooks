@@ -59,7 +59,7 @@
 - name: Deploy service configuration
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/{{ item.value.template }}"
-    dest: "{{ alloy_confd_dir }}/{{ item.value.config_file }}"
+    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
     owner: "{{ alloy_user }}"
     group: "{{ alloy_group }}"
     mode: "0640"
@@ -76,7 +76,7 @@
 
 - name: Remove configuration for absent services
   ansible.builtin.file:
-    path: "{{ alloy_confd_dir }}/{{ item.value.config_file }}"
+    path: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
     state: absent
   loop: "{{ alloy_service_map | dict2items }}"
   loop_control:
