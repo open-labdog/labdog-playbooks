@@ -23,20 +23,28 @@
   loop_control:
     label: "{{ item.path }}"
 
+# See the note in upgrade.yml: apt-get CLI instead of the apt module's
+# update_cache (removed update_cache_extra_args + libapt ignores
+# --allow-releaseinfo-change). Doubly important here — the refresh runs
+# against freshly-rewritten sources, so a masked failure would send the
+# dist-upgrade into a stale/broken cache.
 - name: "Dist-upgrade | Update apt package index"
-  ansible.builtin.apt:
-    update_cache: true
-    update_cache_extra_args: "{{ apt_update_extra_args }}"
+  ansible.builtin.command:
+    cmd: "apt-get update {{ apt_update_extra_args }}"
   register: _apt_update_dist
+  changed_when: false
   failed_when: false
+  retries: 3
+  delay: 15
+  until: _apt_update_dist.rc == 0
 
 - name: "Dist-upgrade | Abort if apt update failed after source rewrite"
   ansible.builtin.fail:
     msg: |
-      apt-get update failed after rewriting sources to {{ next_version }}.
+      apt-get update failed after rewriting sources to {{ next_version }} (rc={{ _apt_update_dist.rc | default('?') }}).
       Check that the target release codename is correct and repositories are reachable.
       apt stderr: {{ _apt_update_dist.stderr | default('(none)') }}
-  when: _apt_update_dist is failed
+  when: _apt_update_dist.rc | default(1) != 0
 
 - name: "Dist-upgrade | Full-upgrade packages"
   ansible.builtin.apt:

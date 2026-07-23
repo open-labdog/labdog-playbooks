@@ -5,6 +5,6 @@ actions/alloy-install/roles/role-alloy-linux-install/tasks/repo_install.yml risk
 actions/alloy-install/roles/role-alloy-linux-service/tasks/main.yml command-instead-of-module
 actions/alloy-install/roles/role-alloy-linux-state/tasks/main.yml command-instead-of-module
 roles/role-apt-upgrade/tasks/cleanup.yml command-instead-of-module
-roles/role-apt-upgrade/tasks/dist-upgrade.yml args[module]
-roles/role-apt-upgrade/tasks/upgrade.yml args[module]
+roles/role-apt-upgrade/tasks/dist-upgrade.yml command-instead-of-module
+roles/role-apt-upgrade/tasks/upgrade.yml command-instead-of-module
 roles/role-apt-upgrade/tasks/upgrade.yml risky-shell-pipe

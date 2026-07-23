@@ -27,24 +27,33 @@
       Run: sudo dpkg --configure -a && sudo apt-get install -f
   when: _dpkg_audit.stdout | length > 0
 
+# Use the apt-get CLI directly rather than ansible.builtin.apt's
+# ``update_cache``: the module's ``update_cache_extra_args`` option was
+# removed in ansible-core 2.21 (passing it makes the task fail argument
+# validation and skip the refresh entirely), and its libapt code path does
+# not honour --allow-releaseinfo-change. The CLI honours the flag, tolerates
+# harmless pdiff hiccups (rc=0), and returns non-zero only on real failures.
 - name: "Upgrade | Update apt package index"
-  ansible.builtin.apt:
-    update_cache: true
-    update_cache_extra_args: "{{ apt_update_extra_args }}"
+  ansible.builtin.command:
+    cmd: "apt-get update {{ apt_update_extra_args }}"
   register: _apt_update
+  changed_when: false
   failed_when: false
+  retries: 3
+  delay: 15
+  until: _apt_update.rc == 0
 
 - name: "Upgrade | Abort if apt update failed"
   ansible.builtin.fail:
     msg: |
-      apt-get update failed on {{ inventory_hostname }}.
+      apt-get update failed on {{ inventory_hostname }} (rc={{ _apt_update.rc | default('?') }}).
       Common causes:
         - A third-party repository changed its Suite/Codename (add --allow-releaseinfo-change
           to apt_update_extra_args, or run: sudo apt-get update --allow-releaseinfo-change)
         - A repository GPG key has expired or is missing
         - A repository URL is unreachable
       apt stderr: {{ _apt_update.stderr | default('(none)') }}
-  when: _apt_update is failed
+  when: _apt_update.rc | default(1) != 0
 
 - name: "Upgrade | Upgrade packages (safe)"
   ansible.builtin.apt:
