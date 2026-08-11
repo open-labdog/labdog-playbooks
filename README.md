@@ -56,6 +56,8 @@ that are genuinely shared across actions — LabDog adds it to
 | [`k8s-upgrade`](./actions/k8s-upgrade/) | group only | Drain, `kubeadm`-upgrade, and re-admit each node serially across the `control_plane` and `workers` groups. Apt-only. |
 | [`linux-upgrade`](./actions/linux-upgrade/) | host, group | `apt upgrade` all packages and reboot if `/var/run/reboot-required` is set. Uses `verify/post-upgrade.yml` as the success gate. |
 | [`linux-os-upgrade`](./actions/linux-os-upgrade/) | host, group | Major-release distribution upgrade (e.g. Debian 12→13, Ubuntu 22.04→24.04) via `apt dist-upgrade`. |
+| [`example`](./actions/example/) | host, group | Harmless probe that exercises the full snapshot → run → verify → rollback lifecycle. Decides success with a `verify_playbook`; `fail_verify` forces a rollback on demand. |
+| [`example-ai-verify`](./actions/example-ai-verify/) | host, group | The same probe, but the verdict comes from LabDog's AI verify step instead of a verify playbook. `simulate_problem` gives the model something real to weigh. |
 
 Each action ships its own README under `actions/<key>/` covering
 parameters, prerequisites, and customization points.
@@ -82,6 +84,16 @@ verify_timeout_seconds: 180                   # verify hook; replaces the
                                               # built-in SSH/services/
                                               # packages check. See
                                               # verify/README.md.
+ai_verify_prompt: >-                # (optional) ask LabDog's AI verify step
+  Confirm the host booted the new   # a question about the evidence it
+  kernel and nothing in the         # collected, instead of deciding success
+  journal indicates a problem.      # in Ansible. Mutually exclusive with
+ai_verify_fail_closed: false        # verify_playbook -- that one wins, and
+                                    # this is silently ignored beside it.
+                                    # fail_closed decides only what an
+                                    # INCONCLUSIVE verdict means; a stated
+                                    # PASS or FAIL is honoured either way.
+                                    # See actions/example-ai-verify/.
 parameters:                        # passed as --extra-vars at runtime
   - key: auto_reboot
     label: Reboot if required

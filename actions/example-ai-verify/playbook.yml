@@ -1,0 +1,66 @@
+---
+- name: LabDog example — AI verify probe
+  hosts: all
+  become: true
+
+  vars:
+    marker_dir: /var/lib/labdog-example
+    simulate_problem: false
+    ansible_python_interpreter: auto_silent
+
+  tasks:
+    - name: Gather system facts
+      ansible.builtin.setup:
+        gather_subset:
+          - hardware
+          - network
+          - virtual
+
+    - name: Create marker directory
+      ansible.builtin.file:
+        path: "{{ marker_dir }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Write probe marker
+      ansible.builtin.copy:
+        dest: "{{ marker_dir }}/last-ai-verify-run"
+        content: |
+          run_at={{ ansible_facts['date_time'].iso8601 }}
+          host={{ inventory_hostname }}
+          os={{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+          kernel={{ ansible_facts['kernel'] }}
+          arch={{ ansible_facts['architecture'] }}
+          simulate_problem={{ simulate_problem | bool }}
+        mode: "0644"
+
+    # The probe changes nothing else, so on a healthy host the AI verify
+    # step is judging an entirely clean picture. This gives it something
+    # real to weigh instead — a genuine error-priority journal entry,
+    # which is exactly what `journalctl --since '10 minutes ago' -p err`
+    # collects into the evidence pack.
+    #
+    # Note this does not force a FAIL the way `example`'s fail_verify
+    # does. Whether one log line constitutes a fault is a judgement, and
+    # watching the model make it is the point of the parameter.
+    - name: Log an error-priority journal entry (simulate_problem mode)
+      ansible.builtin.command:
+        cmd: >-
+          logger -p user.err -t labdog-example
+          "simulated fault for LabDog AI verification, written at
+          {{ ansible_facts['date_time'].iso8601 }}"
+      changed_when: true
+      when: simulate_problem | bool
+
+    - name: Show probe summary
+      ansible.builtin.debug:
+        msg: >-
+          Probe written to {{ marker_dir }}/last-ai-verify-run on
+          {{ inventory_hostname }}
+          ({{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }},
+          {{ ansible_facts['processor_vcpus'] }} vCPU,
+          {{ ansible_facts['memtotal_mb'] }}MB RAM).
+          simulate_problem={{ simulate_problem | bool }}.
+          The verdict now comes from LabDog's AI verify step.

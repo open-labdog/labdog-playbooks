@@ -1,0 +1,64 @@
+key: example-ai-verify
+name: Example / AI Verify Probe
+description: >-
+  The same harmless probe as `example`, but the post-run verdict comes
+  from LabDog's AI verify step instead of a verify playbook. Writes a
+  timestamped marker to the host, then hands the collected evidence —
+  managed services, packages, load, disk, and recent journal errors — to
+  the configured AI provider and asks whether the host came through
+  healthy.
+
+  Use it to exercise the AI verify path end to end without making any
+  production change. Set `simulate_problem` to log a real error to the
+  journal and see whether the model notices it.
+icon: Bot
+playbook: playbook.yml
+version: "1.0"
+estimated_duration: "< 1 min"
+destructive: true
+supports_host: true
+supports_group: true
+
+# Deliberately no `verify_playbook`. That field wins outright — when a
+# manifest declares one, LabDog runs it and never reaches the built-in
+# check that AI verification lives behind. A pack shipping a verify
+# playbook is already answering this question in code, so adding an
+# ai_verify_prompt next to one would be silently ignored. That is the
+# whole reason this is a sibling of `example` rather than a flag on it.
+ai_verify_prompt: >-
+  This host just ran a harmless probe action that writes a marker file
+  under a directory of its own. It changes nothing else.
+
+  Confirm the host is healthy: every managed service is running, every
+  managed package is installed, load and disk are unremarkable, and
+  nothing in the recent journal errors points at a real fault.
+
+  Routine noise is expected on any Linux host and is not a failure. Say
+  FAIL only if you can point at something in the evidence that indicates
+  an actual problem.
+
+# Left at the default deliberately. An inconclusive verdict on a probe
+# that changes nothing should not roll a host back — and this action is
+# where an operator first meets the setting, so it should demonstrate
+# the safe default rather than the strict one. Flip it to true on
+# actions where an unverifiable outcome is itself unacceptable.
+ai_verify_fail_closed: false
+
+parameters:
+  - key: marker_dir
+    label: Marker directory
+    type: string
+    default: /var/lib/labdog-example
+    help_text: >-
+      Directory where the probe marker file is written.
+      The directory is created if it does not exist.
+  - key: simulate_problem
+    label: Log a journal error
+    type: bool
+    default: false
+    help_text: >-
+      When true, writes a genuine error-priority entry to the systemd
+      journal so the AI verify step has something real to weigh.
+      Unlike `example`'s fail_verify this does NOT force a FAIL — it is
+      a judgement call, which is the point. Expect the model to mention
+      the entry and decide whether it matters.
