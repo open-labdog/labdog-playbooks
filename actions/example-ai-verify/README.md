@@ -41,10 +41,37 @@ They are alternatives, not layers.
 `simulate_problem` is **not** the equivalent of `example`'s
 `fail_verify`. That one writes a sentinel the verify playbook is
 hard-coded to fail on, so the outcome is certain. This one writes a
-genuine `user.err` entry via `logger` and leaves the verdict open —
-whether one log line constitutes a fault is exactly the judgement the AI
-verify step exists to make. Expect the model to mention the entry and
-then decide. Either answer is informative.
+genuine `user.err` entry via `logger` and leaves the verdict to the
+model.
+
+What it exercises is **attribution**. The evidence includes ten minutes
+of journal errors, and that window is the window the action just ran in
+— so it contains whatever the action itself logged. The prompt says
+entries tagged `labdog-example` come from this probe and should be
+discounted, so a correct answer is a `PASS` that mentions the entry and
+explains why it did not count.
+
+If your provider fails the host instead, that is worth knowing *before*
+you set `ai_verify_fail_closed` on something that matters — it means the
+model treats any anomaly as disqualifying, and every real action leaves
+anomalies behind.
+
+### Why this is the interesting case
+
+An earlier version of this prompt did not mention attribution. The model
+correctly identified the entry, correctly noted it came from
+`labdog-example`, and failed the host anyway — so LabDog restored the
+pre-change snapshot and rolled back a run that had worked.
+
+That is the trap every AI verify prompt has to avoid. `linux-upgrade`
+restarts services; services log errors while restarting; a prompt that
+does not account for that can revert a successful upgrade. See
+[Writing the prompt](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md#writing-the-prompt)
+in LabDog's action docs.
+
+Note what the prompt does *not* say: it never tells the model to ignore
+errors. A managed service that is still down is still a `FAIL`. The
+distinction is attribution, not leniency.
 
 ## Requirements
 
