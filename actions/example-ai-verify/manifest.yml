@@ -25,17 +25,35 @@ supports_group: true
 # playbook is already answering this question in code, so adding an
 # ai_verify_prompt next to one would be silently ignored. That is the
 # whole reason this is a sibling of `example` rather than a flag on it.
+# Written the way a real manifest should be, because the prompt is where
+# an AI verify step is most easily got wrong.
+#
+# The evidence includes ten minutes of journal errors, and that window is
+# the window this action just ran in — so it contains whatever the action
+# itself logged. A prompt that does not say so invites a FAIL on the
+# action's own footprint, and a FAIL restores the pre-change snapshot.
+# That is not theoretical: an earlier version of this prompt failed the
+# host on the very entry `simulate_problem` writes, and the run was
+# rolled back.
+#
+# Note what the last paragraph does NOT say: it does not tell the model
+# to ignore errors. A service that is still down is still a failure. The
+# distinction is attribution, not leniency.
 ai_verify_prompt: >-
-  This host just ran a harmless probe action that writes a marker file
-  under a directory of its own. It changes nothing else.
+  This host just ran a harmless probe action. It writes one marker file
+  under a directory of its own and changes nothing else — it installs
+  nothing, restarts nothing, and touches no service.
 
-  Confirm the host is healthy: every managed service is running, every
-  managed package is installed, load and disk are unremarkable, and
-  nothing in the recent journal errors points at a real fault.
+  Confirm the host is healthy as it stands now: every managed service is
+  running, every managed package is installed, and load and disk are
+  unremarkable.
 
-  Routine noise is expected on any Linux host and is not a failure. Say
-  FAIL only if you can point at something in the evidence that indicates
-  an actual problem.
+  About the recent journal errors: entries logged by `labdog-example` are
+  written by this probe itself, for testing, and are not host faults —
+  note them and discount them. Ordinary background noise is not a
+  failure either. Say FAIL if a managed service is down, a managed
+  package is missing, or the journal shows a fault that is neither of
+  the above.
 
 # Left at the default deliberately. An inconclusive verdict on a probe
 # that changes nothing should not roll a host back — and this action is
@@ -58,7 +76,11 @@ parameters:
     default: false
     help_text: >-
       When true, writes a genuine error-priority entry to the systemd
-      journal so the AI verify step has something real to weigh.
-      Unlike `example`'s fail_verify this does NOT force a FAIL — it is
-      a judgement call, which is the point. Expect the model to mention
-      the entry and decide whether it matters.
+      journal, tagged `labdog-example`, so the AI verify step has
+      something real in its evidence.
+      Unlike `example`'s fail_verify this does NOT force a FAIL. The
+      prompt tells the model that entries from this probe are its own
+      and should be discounted, so a correct answer is a PASS that
+      mentions the entry and explains why it was discounted. If your
+      provider fails the host instead, that is worth knowing before you
+      set ai_verify_fail_closed on anything that matters.
