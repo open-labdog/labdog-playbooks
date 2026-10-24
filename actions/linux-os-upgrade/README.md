@@ -20,6 +20,9 @@ crossing release boundaries warrants a deliberate operator choice.
 2. **Rewrites the codename** in `/etc/apt/sources.list` and every
    file under `/etc/apt/sources.list.d/` — `{current_version}` →
    `{next_version}`. Backups (`.YYYY-MM-DD@HH:MM:SS~`) are kept.
+   Lines on an archive mirror (`archive.debian.org`,
+   `old-releases.ubuntu.com`, used by end-of-life releases) are pointed
+   back at the live mirrors, since the archive has no newer release.
 3. `apt-get update` (with `--allow-releaseinfo-change`); fails fast
    with a clear message if the new codename or repos are unreachable.
 4. `apt-get full-upgrade` with `force-confdef,force-confold` and
