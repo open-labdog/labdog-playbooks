@@ -1,0 +1,122 @@
+---
+# Everything that can fail a host without touching it. Runs after
+# role-alloy-linux-state and before anything is installed or written, so a
+# host that fails here keeps its config and its running Alloy as they were.
+# A failure fails only this host: in a group run the others carry on.
+
+- name: Require both destination URLs
+  ansible.builtin.assert:
+    that:
+      - alloy_prometheus_url | default('', true) | length > 0
+      - alloy_loki_url | default('', true) | length > 0
+    fail_msg: >-
+      No {{ 'Mimir/Prometheus' if not alloy_prometheus_url | default('', true) else 'Loki' }}
+      destination for this host. In LabDog, register one under Integrations →
+      Grafana and assign it to the host or one of its groups (or mark one
+      default). Outside LabDog, pass alloy_prometheus_url and alloy_loki_url.
+    quiet: true
+
+- name: Require http(s) destination URLs
+  ansible.builtin.assert:
+    that:
+      - (item | urlsplit('scheme')) in ['http', 'https']
+      - (item | urlsplit('hostname')) | default('', true) | length > 0
+    fail_msg: "{{ item }} is not an http:// or https:// URL."
+    quiet: true
+  loop:
+    - "{{ alloy_prometheus_url }}"
+    - "{{ alloy_loki_url }}"
+
+- name: Require Alloy for a config-only run
+  ansible.builtin.assert:
+    that: _alloy_pkg_present | bool
+    fail_msg: >-
+      "Config only" skips installing Alloy, and Alloy isn't installed on this
+      host. Nothing was changed. Run the action without "Config only".
+    quiet: true
+  when: alloy_config_only | default(false) | bool
+
+# --- Files this run would write ------------------------------------------
+- name: Refuse to overwrite a file this pack did not write
+  vars:
+    _targets: >-
+      {{ alloy_pack_files | map('regex_replace', '^', alloy_confd_dir ~ '/' ~ alloy_config_prefix) | list }}
+    _foreign: "{{ _targets | intersect(_alloy_live_files.keys() | list) | difference(_alloy_pack_written) }}"
+  ansible.builtin.assert:
+    that: _foreign | length == 0
+    fail_msg: >-
+      {{ _foreign | join(', ') }} {{ 'is' if _foreign | length == 1 else 'are' }} not
+      written by this action (no "{{ alloy_managed_header }}" first line), and
+      this run would replace {{ 'it' if _foreign | length == 1 else 'them' }}.
+      Nothing was changed. Move or rename the file, or, if it is a
+      hand-maintained endpoints config, see the action's README for moving it
+      onto LabDog's per-host destinations.
+    quiet: true
+
+# --- Existing pipelines --------------------------------------------------
+- name: Find files that already ship metrics or logs
+  vars:
+    _others: "{{ _alloy_live_files | dict2items | rejectattr('key', 'in', _alloy_pack_written) | list }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['grep', '-lE', '^[[:space:]]*(prometheus\.remote_write|loki\.write)[[:space:]]+"']
+         + (_others | map(attribute='value') | list) }}
+  register: _alloy_pipeline_scan
+  changed_when: false
+  failed_when: _alloy_pipeline_scan.rc > 1
+  check_mode: false
+  when: _alloy_live_files | dict2items | rejectattr('key', 'in', _alloy_pack_written) | list | length > 0
+
+- name: Refuse to ship the same data twice
+  ansible.builtin.assert:
+    that: >-
+      (alloy_allow_existing_pipelines | bool)
+      or (_alloy_pipeline_scan.stdout_lines | default([]) | length == 0)
+    fail_msg: >-
+      {{ _alloy_pipeline_scan.stdout_lines | default([]) | join(', ') }} already
+      define{{ 's' if _alloy_pipeline_scan.stdout_lines | default([]) | length == 1 else '' }}
+      prometheus.remote_write or loki.write. Alloy loads every file together,
+      so adding LabDog's pipeline would ship this host's metrics and logs a
+      second time. Nothing was changed. Remove that pipeline (see the README
+      for moving a hand-maintained endpoints config onto LabDog's settings),
+      or set "Allow existing pipelines" if shipping twice is intended.
+    quiet: true
+
+# --- alloy validate ---------------------------------------------------------
+# The combined config is validated with the host's own Alloy before the
+# live directory is touched. An Alloy without the validate command can't be
+# checked, so the host is refused rather than changed blind. A fresh install
+# gets a current Alloy, which has it.
+- name: Check that the installed Alloy can validate a config
+  ansible.builtin.command:
+    argv: [alloy, validate, --help]
+  register: _alloy_validate_help
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: _alloy_pkg_present | bool
+
+- name: Refuse an Alloy that cannot validate
+  ansible.builtin.assert:
+    that: _alloy_validate_help.rc | default(0) == 0
+    fail_msg: >-
+      The installed Alloy ({{ _alloy_pkg_version | default('unknown version', true) }})
+      has no "alloy validate" command, so this run can't check the combined
+      config before changing it. Nothing was changed. Upgrade Alloy on this
+      host (apt install alloy from apt.grafana.com), then run the action again.
+    quiet: true
+  when: _alloy_pkg_present | bool
+
+# --- Reachability -------------------------------------------------------
+- name: Check that the destinations are reachable from this host
+  ansible.builtin.include_tasks: probe.yml
+  loop:
+    - name: Mimir/Prometheus
+      url: "{{ alloy_prometheus_url }}"
+      skip_verify: "{{ alloy_prometheus_tls_insecure_skip_verify | bool }}"
+    - name: Loki
+      url: "{{ alloy_loki_url }}"
+      skip_verify: "{{ alloy_loki_tls_insecure_skip_verify | bool }}"
+  loop_control:
+    loop_var: _probe
+    label: "{{ _probe.name }} {{ _probe.url }}"

@@ -36,9 +36,13 @@
     - _alloy_repo_check.rc is defined
     - _alloy_repo_check.rc != 0
 
+# Written before the package so its postinst doesn't install the default
+# single-file config pointer. Only on a host with no Alloy at all: this
+# role also runs on re-runs over a LabDog-owned directory, where the file
+# already points at it and may carry the operator's CUSTOM_ARGS.
 - name: Pre-write /etc/default/alloy before package install
   ansible.builtin.copy:
-    dest: /etc/default/alloy
+    dest: "{{ alloy_env_file }}"
     content: |
       ## Managed by Ansible — do not edit manually
       CONFIG_FILE="{{ alloy_confd_dir }}"
@@ -47,6 +51,7 @@
     owner: root
     group: root
     mode: "0644"
+  when: not _alloy_pkg_present | bool
 
 - name: Install Alloy
   ansible.builtin.apt:

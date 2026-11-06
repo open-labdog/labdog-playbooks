@@ -1,0 +1,103 @@
+---
+# Validates the staged config (role-alloy-linux-configure /
+# role-alloy-linux-services) as one config, the way Alloy loads it. On
+# failure the run stops here: the live directory hasn't been touched and
+# the running Alloy keeps its old config. The message names the offending
+# file by its live path.
+
+- name: Read the Alloy version
+  ansible.builtin.command:
+    argv: [alloy, --version]
+  register: _alloy_version_out
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Record the Alloy version
+  ansible.builtin.set_fact:
+    _alloy_version: >-
+      {{ (_alloy_version_out.stdout | default('') | regex_search('version v?([0-9]+\.[0-9]+\.[0-9]+)', '\1')
+          | default(['0.0.0'], true))[0] }}
+    _alloy_bin_present: "{{ _alloy_version_out.rc | default(1) == 0 }}"
+
+# Only a dry run on a host without Alloy gets here with no binary: the
+# install was a preview too.
+- name: Note that a dry run on a host without Alloy can't validate
+  ansible.builtin.debug:
+    msg: Alloy is not installed yet (dry run), so the new config can't be validated in this preview.
+  when:
+    - not _alloy_bin_present | bool
+    - ansible_check_mode
+
+- name: Require the alloy binary
+  ansible.builtin.assert:
+    that: _alloy_bin_present | bool
+    fail_msg: >-
+      The alloy package is installed but "alloy --version" failed
+      ({{ _alloy_version_out.stderr | default(_alloy_version_out.msg | default('')) }}),
+      so the new config can't be validated. Nothing in the config was changed.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Validate the combined config
+  ansible.builtin.command:
+    argv: [alloy, validate, "{{ _alloy_stage }}"]
+  register: _alloy_validate
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: _alloy_bin_present | bool
+
+- name: Check references between components (Alloy before {{ alloy_validate_refs_below }})
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_facts.python.executable | default('/usr/bin/python3') }}"
+      - -c
+      - "{{ alloy_ref_check_script }}"
+      - "{{ _alloy_stage }}"
+  register: _alloy_refcheck
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - _alloy_bin_present | bool
+    - _alloy_version is version(alloy_validate_refs_below, '<')
+
+- name: Stop when the combined config does not load
+  vars:
+    _out: >-
+      {{ ((_alloy_validate.stderr | default('')) ~ '\n' ~ (_alloy_validate.stdout | default(''))
+          ~ '\n' ~ (_alloy_refcheck.stdout | default(''))) }}
+    _failed: >-
+      {{ (_alloy_validate.rc | default(0)) != 0 or (_alloy_refcheck.rc | default(0)) != 0 }}
+    # staging file name -> live path, for the files this pack doesn't
+    # write (its own are replaced by the newly rendered ones)
+    _foreign: "{{ _alloy_live_files.keys() | difference(_alloy_pack_written) }}"
+    _names: "{{ dict(_foreign | map('basename') | zip(_foreign)) }}"
+    _bad: >-
+      {{ _out | regex_findall('Error: ' ~ (_alloy_stage | regex_escape) ~ '/([^:\s]+):')
+         | unique | list }}
+    _live_bad: >-
+      {{ _bad | map('extract', _names) | select('defined') | list }}
+    _ours: >-
+      {{ _bad | reject('in', _names.keys() | list) | list }}
+    _hint: >-
+      A file this action does not manage is incompatible with the new config,
+      for example it refers to a component an older version of this action
+      named differently (loki.write.default, prometheus.remote_write.default).
+      Update or remove that file; this action never edits files it did not
+      write.
+  ansible.builtin.fail:
+    msg: >-
+      The config Alloy would load after this run does not validate, so
+      nothing was changed and Alloy keeps running its current config.
+      {{ ('Offending file: ' ~ (_live_bad | join(', ')) ~ '. ') if _live_bad | length > 0 else '' }}
+      {{ ("This action's own file failed: " ~ (_ours | join(', ')) ~ '. ') if _ours | length > 0 else '' }}
+      {{ _hint if _live_bad | length > 0 else '' }}
+      Alloy said: {{ _out | replace(_alloy_stage ~ '/', '') | trim }}
+  when: _failed | bool
+
+- name: Report a valid config
+  ansible.builtin.debug:
+    msg: "The combined config validates with Alloy {{ _alloy_version }} ({{ _alloy_stage }})."
+  when: _alloy_bin_present | bool

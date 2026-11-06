@@ -1,0 +1,98 @@
+---
+# Is Alloy up, and running the config on disk? Used after a restart or
+# reload by role-alloy-linux-apply, and on its own by verify.yml.
+#
+# One "is-active" right after a restart proves nothing: Alloy that can't
+# load its config (or bind its port) exits within a second or two, systemd
+# restarts it, and for a moment it looks active. So:
+#   1. wait for /-/ready to answer 200 (the config loaded);
+#   2. wait alloy_settle_seconds and check systemd didn't restart it in
+#      between and it is still running;
+#   3. check alloy_config_last_load_successful is 1, which is what catches a
+#      reload (SIGHUP) that failed: Alloy keeps serving its old config and
+#      stays ready, but reports the failed load there.
+
+- name: Read Alloy's environment file
+  ansible.builtin.slurp:
+    src: "{{ alloy_env_file }}"
+  register: _alloy_health_env
+  failed_when: false
+
+- name: Work out Alloy's HTTP address
+  vars:
+    _env_text: "{{ _alloy_health_env.content | default('') | b64decode }}"
+    _listen: >-
+      {{ _env_text | regex_search('--server\.http\.listen-addr[= ]([^\s"]+)', '\1') | default([], true) }}
+  ansible.builtin.set_fact:
+    _alloy_health_base: >-
+      http://{{ (_listen[0] if _listen | length > 0 else alloy_http_listen_addr)
+                | regex_replace('^0\.0\.0\.0:', '127.0.0.1:') | regex_replace('^:', '127.0.0.1:') }}
+
+- name: Wait for Alloy to report ready
+  ansible.builtin.uri:
+    url: "{{ _alloy_health_base }}/-/ready"
+    use_proxy: false
+    timeout: 5
+  register: _alloy_ready
+  failed_when: false
+  retries: "{{ alloy_ready_retries }}"
+  delay: "{{ alloy_ready_delay }}"
+  until: _alloy_ready.status | default(-1) == 200
+
+- name: Read the unit's state once ready
+  ansible.builtin.command:
+    argv: [systemctl, show, alloy, --property=ActiveState, --property=SubState, --property=NRestarts]
+  register: _alloy_unit_ready
+  changed_when: false
+
+- name: Let Alloy run for a few seconds
+  ansible.builtin.wait_for:
+    timeout: "{{ alloy_settle_seconds }}"
+
+- name: Read the unit's state again
+  ansible.builtin.command:
+    argv: [systemctl, show, alloy, --property=ActiveState, --property=SubState, --property=NRestarts]
+  register: _alloy_unit_settled
+  changed_when: false
+
+- name: Read whether the last config load succeeded
+  ansible.builtin.uri:
+    url: "{{ _alloy_health_base }}/metrics"
+    use_proxy: false
+    timeout: 5
+    return_content: true
+  register: _alloy_metrics
+  failed_when: false
+
+- name: Collect Alloy's recent log for the report
+  ansible.builtin.command:
+    argv: [journalctl, -u, alloy, -n, "25", --no-pager, -o, cat]
+  register: _alloy_journal
+  changed_when: false
+  failed_when: false
+
+- name: Check that Alloy is up and running the new config
+  vars:
+    _r: "{{ dict(_alloy_unit_ready.stdout_lines | map('split', '=', 1) | list) }}"
+    _s: "{{ dict(_alloy_unit_settled.stdout_lines | map('split', '=', 1) | list) }}"
+    _load: >-
+      {{ (_alloy_metrics.content | default('')
+          | regex_search('(?m)^alloy_config_last_load_successful(?:\{[^}]*\})? ([0-9.e+-]+)$', '\1')
+          | default(['missing'], true))[0] }}
+    _problems: >-
+      {{ ([] if _alloy_ready.status | default(-1) == 200
+          else ['it never reported ready on ' ~ _alloy_health_base ~ '/-/ready'
+                ~ ' (' ~ (_alloy_ready.msg | default('no answer') | regex_replace(' and not \\[[^\\]]*\\]', '')) ~ ')'])
+         + ([] if _s.ActiveState | default('') == 'active' and _s.SubState | default('') == 'running'
+            else ['the unit is ' ~ _s.ActiveState | default('?') ~ '/' ~ _s.SubState | default('?')])
+         + ([] if _s.NRestarts | default('0') == _r.NRestarts | default('0')
+            else ['systemd restarted it ' ~ ((_s.NRestarts | int) - (_r.NRestarts | int)) ~ ' time(s) in '
+                  ~ alloy_settle_seconds ~ 's (crash loop)'])
+         + ([] if _load in ['1', 'missing']
+            else ['its last config load failed (alloy_config_last_load_successful=' ~ _load ~ ')']) }}
+  ansible.builtin.assert:
+    that: _problems | length == 0
+    fail_msg: >-
+      Alloy is not running the new config: {{ _problems | join('; ') }}.
+      Recent log: {{ (_alloy_journal.stdout_lines | default([]) | select | list)[-8:] | join(' | ') }}
+    success_msg: Alloy is up and its config loaded.

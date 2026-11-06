@@ -1,0 +1,43 @@
+---
+# Copies of everything role-alloy-linux-apply may change, so its rescue can
+# put them back: the config directory, the environment file and the systemd
+# drop-in. Recorded as present/absent so a file this run creates is removed
+# again rather than left behind.
+
+- name: Create the backup directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: labdog-alloy-backup.
+  register: _alloy_backup_dir
+  changed_when: false  # scratch space
+
+- name: Record the backup directory
+  ansible.builtin.set_fact:
+    _alloy_backup: "{{ _alloy_backup_dir.path }}"
+
+- name: Check what exists before the change
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ alloy_confd_dir }}"
+    - "{{ alloy_env_file }}"
+    - /etc/systemd/system/alloy.service.d/override.conf
+  register: _alloy_backup_stats
+
+- name: Record what exists before the change
+  ansible.builtin.set_fact:
+    _alloy_backup_items: >-
+      {{ dict(_alloy_backup_stats.results | map(attribute='item')
+              | zip(_alloy_backup_stats.results | map(attribute='stat.exists'))) }}
+
+# cp -a keeps owners, modes and timestamps, so a restore is byte-for-byte.
+- name: Copy them into the backup
+  ansible.builtin.command:
+    argv: [cp, -a, "{{ item.key }}", "{{ _alloy_backup }}/{{ idx }}"]
+    creates: "{{ _alloy_backup }}/{{ idx }}"
+  changed_when: false
+  loop: "{{ _alloy_backup_items | dict2items }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.key }}"
+  when: item.value

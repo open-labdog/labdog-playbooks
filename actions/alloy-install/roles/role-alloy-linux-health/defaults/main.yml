@@ -1,0 +1,8 @@
+---
+# Self-contained so verify.yml can use this role on its own. The same
+# values are documented in role-alloy-linux-state/defaults.
+alloy_env_file: /etc/default/alloy
+alloy_http_listen_addr: 127.0.0.1:12345
+alloy_ready_retries: 15
+alloy_ready_delay: 2
+alloy_settle_seconds: 8

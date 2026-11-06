@@ -1,0 +1,72 @@
+---
+# Alloy keeps a log source's read position (loki.source.file offsets,
+# loki.source.journal cursor, loki.source.docker offsets) under
+# <storage>/<component id>/. Older versions of this pack named the
+# components differently, and a component with no saved position starts
+# over: every /var/log/*.log would be re-sent with today's timestamp, and
+# the journal's last 24h again. So the old directory is copied to the new
+# name before Alloy restarts, once (never over an existing one), and only
+# when nothing in the new config still defines the old component.
+# loki.source.file also tails from the end of any file it has no position
+# for (linux_file_logs.alloy.j2), which covers a host whose old positions
+# are gone.
+#
+# Alloy writes positions to disk only every few seconds, so a copy taken
+# while it runs can be behind what it already shipped, and the new
+# component would ship those lines again. Alloy saves its final positions
+# when it stops, so it is stopped before the first copy; the restart
+# further down starts it again (always a full restart then, not a reload),
+# and the rescue restarts it on the old config if anything fails.
+#
+# Input: _migration = {from, to}
+
+- name: Look for the old and new position directories
+  ansible.builtin.stat:
+    path: "{{ alloy_storage_path }}/{{ item }}"
+  loop:
+    - "{{ _migration.from }}"
+    - "{{ _migration.to }}"
+  register: _alloy_pos
+
+- name: Check whether the new config still defines the old component
+  vars:
+    _type: "{{ _migration.from.split('.')[:-1] | join('.') }}"
+    _label: "{{ _migration.from.split('.')[-1] }}"
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -rqE
+      - '^[[:space:]]*{{ _type | regex_escape }}[[:space:]]+"{{ _label | regex_escape }}"'
+      - "{{ _alloy_stage }}"
+  register: _alloy_pos_still_defined
+  changed_when: false
+  failed_when: _alloy_pos_still_defined.rc > 1
+  check_mode: false
+  when:
+    - _alloy_pos.results[0].stat.exists
+    - not _alloy_pos.results[1].stat.exists
+
+- name: Stop Alloy so it saves its final positions
+  ansible.builtin.systemd:
+    name: alloy
+    state: stopped
+  register: _alloy_pos_stop
+  when:
+    - _alloy_pos.results[0].stat.exists
+    - not _alloy_pos.results[1].stat.exists
+    - _alloy_pos_still_defined.rc | default(0) == 1
+    - _alloy_was_active | bool
+    - not (_alloy_stopped_for_positions | default(false) | bool)
+
+- name: Remember whether Alloy was stopped for the copy
+  ansible.builtin.set_fact:
+    _alloy_stopped_for_positions: "{{ (_alloy_stopped_for_positions | default(false) | bool) or (_alloy_pos_stop is changed) }}"
+
+- name: Copy the position directory to the new component name
+  ansible.builtin.command:
+    argv: [cp, -a, "{{ alloy_storage_path }}/{{ _migration.from }}", "{{ alloy_storage_path }}/{{ _migration.to }}"]
+    creates: "{{ alloy_storage_path }}/{{ _migration.to }}"
+  when:
+    - _alloy_pos.results[0].stat.exists
+    - not _alloy_pos.results[1].stat.exists
+    - _alloy_pos_still_defined.rc | default(0) == 1

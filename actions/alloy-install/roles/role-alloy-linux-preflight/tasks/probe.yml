@@ -1,0 +1,95 @@
+---
+# Probe one destination from the host itself, step by step, so a failure
+# says which step broke: DNS, TCP, or TLS + HTTP. Any HTTP response counts
+# as reachable, because a GET on a push URL answers 404, 405 or 401. Each
+# step retries briefly. Read-only, so it runs in check mode too.
+#
+# Input: _probe = {name, url, skip_verify}
+
+- name: Work out where the endpoint lives | {{ _probe.name }}
+  vars:
+    _scheme: "{{ _probe.url | urlsplit('scheme') }}"
+  ansible.builtin.set_fact:
+    _probe_host: "{{ _probe.url | urlsplit('hostname') }}"
+    _probe_port: "{{ _probe.url | urlsplit('port') | default(443 if _scheme == 'https' else 80, true) | int }}"
+    _probe_https: "{{ _scheme == 'https' }}"
+
+- name: Resolve the endpoint host name | {{ _probe.name }}
+  ansible.builtin.command:
+    argv: [getent, ahosts, "{{ _probe_host }}"]
+  register: _probe_dns
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  retries: "{{ alloy_probe_retries }}"
+  delay: "{{ alloy_probe_delay }}"
+  until: _probe_dns.rc == 0
+
+- name: Fail when the endpoint does not resolve | {{ _probe.name }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ _probe.name }} URL {{ _probe.url }} is unreachable from this host: DNS
+      lookup of {{ _probe_host }} failed. Nothing was changed. Assign this host
+      a destination it can resolve, or fix its DNS.
+  when: _probe_dns.rc != 0
+
+- name: Connect to the endpoint over TCP | {{ _probe.name }}
+  ansible.builtin.wait_for:
+    host: "{{ _probe_host }}"
+    port: "{{ _probe_port | int }}"
+    timeout: "{{ alloy_probe_timeout }}"
+  register: _probe_tcp
+  # failed_when: false would also clear .failed, which is what the next
+  # task reads; ignore_errors keeps it.
+  ignore_errors: true
+  check_mode: false
+  retries: "{{ alloy_probe_retries }}"
+  delay: "{{ alloy_probe_delay }}"
+  until: _probe_tcp is succeeded
+
+- name: Fail when the endpoint refuses TCP | {{ _probe.name }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ _probe.name }} URL {{ _probe.url }} is unreachable from this host: TCP
+      connection to {{ _probe_host }}:{{ _probe_port }} failed
+      ({{ _probe_tcp.msg | default('timeout') }}). Nothing was changed. Check
+      firewalls between this host and the endpoint, or assign it a destination
+      it can reach.
+  when: _probe_tcp is failed
+
+# Alloy doesn't use HTTP(S)_PROXY for remote_write unless configured to, so
+# neither does the probe.
+- name: Send an HTTP request to the endpoint | {{ _probe.name }}
+  ansible.builtin.uri:
+    url: "{{ _probe.url }}"
+    method: GET
+    validate_certs: "{{ not (_probe.skip_verify | bool) }}"
+    use_proxy: false
+    follow_redirects: none
+    timeout: "{{ alloy_probe_timeout }}"
+    status_code: "{{ range(100, 600) | list }}"
+  register: _probe_http
+  failed_when: false
+  check_mode: false
+  retries: "{{ alloy_probe_retries }}"
+  delay: "{{ alloy_probe_delay }}"
+  until: (_probe_http.status | default(-1) | int) > 0
+
+- name: Fail when the endpoint does not answer over HTTP | {{ _probe.name }}
+  vars:
+    # uri appends "and not [<every accepted status>]"; drop that list.
+    _why: "{{ _probe_http.msg | default('no response') | regex_replace(' and not \\[[^\\]]*\\]', '') }}"
+    _tls: "{{ _probe_https | bool and (_why is search('(?i)ssl|tls|certificate|handshake|wrong version')) }}"
+    _what: >-
+      {{ ('TLS handshake failed' ~ ('' if _probe.skip_verify | bool else ' or the certificate did not verify'))
+         if _tls | bool else 'no HTTP response' }}
+    _hint: >-
+      {{ ' If the endpoint uses a private CA, turn off TLS verification on the destination in LabDog'
+         ~ ' or set alloy_tls_insecure_skip_verify.' if (_tls | bool and not _probe.skip_verify | bool) else '' }}
+  ansible.builtin.fail:
+    msg: "{{ _probe.name }} URL {{ _probe.url }} is unreachable from this host: {{ _what }} ({{ _why }}). Nothing was changed.{{ _hint | default('', true) }}"
+  when: (_probe_http.status | default(-1) | int) <= 0
+
+- name: Report the endpoint as reachable | {{ _probe.name }}
+  ansible.builtin.debug:
+    msg: "{{ _probe.name }} {{ _probe.url }} answered HTTP {{ _probe_http.status }}."

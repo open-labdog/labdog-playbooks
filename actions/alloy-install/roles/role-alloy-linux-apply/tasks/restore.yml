@@ -1,0 +1,71 @@
+---
+# Rescue path of role-alloy-linux-apply: put back exactly what
+# backup.yml saved, remove what this run created, and bring Alloy back on
+# the previous config. Never stops the run from failing: the caller fails
+# it afterwards with what happened here appended.
+
+- name: Restore the backed-up files
+  block:
+    - name: Remove what this run wrote
+      ansible.builtin.file:
+        path: "{{ item.key }}"
+        state: absent
+      loop: "{{ _alloy_backup_items | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Copy the previous versions back
+      ansible.builtin.command:
+        argv: [cp, -a, "{{ _alloy_backup }}/{{ idx }}", "{{ item.key }}"]
+        creates: "{{ item.key }}"
+      loop: "{{ _alloy_backup_items | dict2items }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item.key }}"
+      when: item.value
+
+    # A new config that crash-looped leaves the unit start-limited, and
+    # systemd would refuse the restart below for a while.
+    - name: Clear the unit's failed state
+      ansible.builtin.command:
+        argv: [systemctl, reset-failed, alloy]
+      changed_when: false
+      failed_when: false
+
+    - name: Bring Alloy back on the previous config
+      ansible.builtin.systemd:
+        name: alloy
+        daemon_reload: true
+        state: "{{ 'restarted' if _alloy_was_active | bool else 'stopped' }}"
+      failed_when: false
+
+    - name: Give Alloy a moment, then read its state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, alloy]
+      register: _alloy_after_restore
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 2
+      until: (not _alloy_was_active | bool) or _alloy_after_restore.stdout == 'active'
+
+    - name: Record the restore
+      ansible.builtin.set_fact:
+        _alloy_restore_report: >-
+          {{ 'The previous config was put back and Alloy is running on it again.'
+             if (_alloy_was_active | bool and _alloy_after_restore.stdout == 'active')
+             else ('The previous config was put back. Alloy was not running before this run, so it is left stopped.'
+                   if not _alloy_was_active | bool
+                   else 'The previous config was put back, but Alloy did not come back up on it either (state: '
+                        ~ (_alloy_after_restore.stdout | default('unknown')) ~ '), so the cause is probably outside'
+                        ~ ' the config. See journalctl -u alloy on the host.') }}
+
+  rescue:
+    - name: Record that the restore failed
+      ansible.builtin.set_fact:
+        _alloy_restore_failed: true
+        _alloy_restore_report: >-
+          Putting the previous config back ALSO failed
+          ({{ ansible_failed_result.msg | default('unknown error') }}). The
+          backup is kept at {{ _alloy_backup }}: numbered entries are, in
+          order, {{ _alloy_backup_items.keys() | list | join(', ') }}.

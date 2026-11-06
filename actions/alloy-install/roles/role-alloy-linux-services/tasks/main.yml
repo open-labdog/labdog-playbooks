@@ -1,92 +1,61 @@
 ---
-# _alloy_template_dir and _alloy_detected facts are set by
-# role-alloy-configure and role-alloy-detect respectively, which run
-# earlier in the same play.
+# Adds the per-service configs (Docker) to the staging directory built by
+# role-alloy-linux-configure, or takes this pack's copy out of it when the
+# service is gone. Writes nothing live: role-alloy-linux-apply installs
+# what validates. _alloy_detected comes from role-alloy-linux-detect.
 
-- name: Assert template directory fact is available
+- name: Assert the staging directory is available
   ansible.builtin.assert:
-    that: _alloy_template_dir is defined
+    that:
+      - _alloy_template_dir is defined
+      - _alloy_stage is defined
     fail_msg: >-
-      _alloy_template_dir is not set. role-alloy-configure must run before
-      role-alloy-services in the same play. If using tags, include 'configure'
-      together with 'services' (e.g. --tags configure,services,service).
+      role-alloy-linux-configure must run before role-alloy-linux-services in
+      the same play.
 
-- name: Create systemd override directory for Alloy
-  ansible.builtin.file:
-    path: /etc/systemd/system/alloy.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: >-
-    (alloy_force_docker is not none)
-    | ternary(
-        alloy_force_docker | bool,
-        (_alloy_detected | default({})).docker | default(false)
-      )
+- name: Decide which service configs this host gets
+  ansible.builtin.set_fact:
+    _alloy_services_wanted: >-
+      {{ _alloy_services_wanted | default({}) | combine({
+           item.key: (lookup('vars', 'alloy_force_' + item.key, default=none) | bool)
+                     if lookup('vars', 'alloy_force_' + item.key, default=none) is not none
+                     else ((_alloy_detected | default({}))[item.key] | default(false) | bool)
+         }) }}
+  loop: "{{ alloy_service_map | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
 
-- name: Deploy systemd override to run Alloy as root (docker hosts)
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/alloy.service.d/override.conf
-    content: |
-      [Service]
-      User=root
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart alloy
-  when: >-
-    (alloy_force_docker is not none)
-    | ternary(
-        alloy_force_docker | bool,
-        (_alloy_detected | default({})).docker | default(false)
-      )
+# Reading the Docker socket needs root. Recorded here, applied by
+# role-alloy-linux-apply as a systemd drop-in.
+- name: Decide whether Alloy runs as root, and which pack files go
+  ansible.builtin.set_fact:
+    _alloy_run_as_root: "{{ _alloy_services_wanted.docker | default(false) }}"
+    _alloy_unwanted_files: >-
+      {{ alloy_service_map | dict2items
+         | selectattr('key', 'in', _alloy_services_wanted | dict2items | rejectattr('value') | map(attribute='key') | list)
+         | map(attribute='value.config_file') | list }}
 
-- name: Remove systemd override on non-docker hosts
-  ansible.builtin.file:
-    path: /etc/systemd/system/alloy.service.d/override.conf
-    state: absent
-  notify: Restart alloy
-  when: >-
-    not (
-      (alloy_force_docker is not none)
-      | ternary(
-          alloy_force_docker | bool,
-          (_alloy_detected | default({})).docker | default(false)
-        )
-    )
-
-- name: Deploy service configuration
+- name: Render wanted service configs into staging
   ansible.builtin.template:
     src: "{{ _alloy_template_dir }}/{{ item.value.template }}"
-    dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
-    owner: "{{ alloy_user }}"
-    group: "{{ alloy_group }}"
-    mode: "0640"
+    dest: "{{ _alloy_stage }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
+    mode: "0600"
   loop: "{{ alloy_service_map | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
-  when: >-
-    (lookup('vars', 'alloy_force_' + item.key, default=none) is not none)
-    | ternary(
-        lookup('vars', 'alloy_force_' + item.key, default=none),
-        (_alloy_detected | default({}))[item.key] | default(false)
-      )
-  notify: Restart alloy
+  when: _alloy_services_wanted[item.key]
+  changed_when: false  # staging only
+  check_mode: false
 
-- name: Remove configuration for absent services
+# Only this pack's own copy can be here under that name: preflight refuses
+# a run that would replace someone else's.
+- name: Take configs for absent services out of staging
   ansible.builtin.file:
-    path: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
+    path: "{{ _alloy_stage }}/{{ alloy_config_prefix }}{{ item.value.config_file }}"
     state: absent
   loop: "{{ alloy_service_map | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
-  when: >-
-    not (
-      (lookup('vars', 'alloy_force_' + item.key, default=none) is not none)
-      | ternary(
-          lookup('vars', 'alloy_force_' + item.key, default=none),
-          (_alloy_detected | default({}))[item.key] | default(false)
-        )
-    )
-  notify: Restart alloy
+  when: not _alloy_services_wanted[item.key]
+  changed_when: false  # staging only
+  check_mode: false

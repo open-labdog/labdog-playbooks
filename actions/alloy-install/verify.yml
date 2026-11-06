@@ -1,0 +1,20 @@
+---
+# LabDog runs this after the action on hosts it snapshotted (destructive
+# action, Proxmox-mapped VM). A failure here makes LabDog restore the
+# snapshot. The action checks the same thing itself before it finishes;
+# this is the independent second look LabDog's rollback hangs off, and
+# unlike LabDog's built-in verify it doesn't depend on alloy.service already
+# being one of the host's managed services (it is only registered after a
+# successful run).
+- name: Verify Grafana Alloy
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check that Alloy is up and its config loaded
+      ansible.builtin.include_role:
+        name: role-alloy-linux-health
+      vars:
+        # LabDog's verify budget is verify_timeout_seconds in the manifest.
+        alloy_ready_retries: 10
+        alloy_settle_seconds: 5
