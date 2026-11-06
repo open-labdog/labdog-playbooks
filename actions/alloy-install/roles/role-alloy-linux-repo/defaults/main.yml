@@ -1,0 +1,11 @@
+---
+# Grafana's APT repository. Override to point at an internal mirror.
+alloy_apt_key_url: https://apt.grafana.com/gpg-full.key
+alloy_apt_keyring: /etc/apt/keyrings/grafana.asc
+alloy_apt_repo: "deb [signed-by={{ alloy_apt_keyring }}] https://apt.grafana.com stable main"
+
+# Packages the repository setup needs. (software-properties-common used to
+# be here; apt_repository doesn't need it, and Debian 13 no longer ships it.)
+alloy_apt_prerequisites:
+  - ca-certificates
+  - gpg

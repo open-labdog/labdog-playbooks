@@ -16,4 +16,8 @@ local.file_match "labdog_file_logs" {
 loki.source.file "labdog_file_logs" {
   targets    = local.file_match.labdog_file_logs.targets
   forward_to = [loki.relabel.labdog.receiver]
+  // A file with no saved position is read from its end, not its start.
+  // Otherwise a host whose positions were lost (or that is new to this
+  // config) re-sends every matching log with today's timestamp.
+  tail_from_end = true
 }

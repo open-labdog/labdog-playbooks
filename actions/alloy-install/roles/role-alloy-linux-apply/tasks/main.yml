@@ -1,0 +1,194 @@
+---
+# Installs the validated staging config into the live directory, restarts
+# (or reloads) Alloy, and checks that it came up on it. Everything is in one
+# block: if any step fails, including Alloy not starting, the rescue puts
+# back the files this run changed, restarts Alloy on its previous config,
+# and still fails the run, so LabDog reports the failure and its own
+# snapshot rollback (on VM hosts) runs as usual.
+#
+# Inputs: role-alloy-linux-state (mode, live files, unit state),
+# role-alloy-linux-configure / -services (_alloy_stage, _alloy_run_as_root).
+
+- name: Apply the new config
+  block:
+    - name: Back up what this run may change
+      ansible.builtin.include_tasks: backup.yml
+      when: not ansible_check_mode
+
+    - name: Carry log positions over from older component names
+      ansible.builtin.include_tasks: positions.yml
+      loop: "{{ alloy_position_migrations }}"
+      loop_control:
+        loop_var: _migration
+        label: "{{ _migration.from }} -> {{ _migration.to }}"
+
+    - name: Create the LabDog config directory (fresh / adopt_file)
+      ansible.builtin.file:
+        path: "{{ alloy_confd_dir }}"
+        state: directory
+        owner: "{{ alloy_user }}"
+        group: "{{ alloy_group }}"
+        mode: "0755"
+      register: _alloy_c_dir
+      when: _alloy_mode != 'adopt_dir'
+
+    # adopt_file: the operator's single file is copied in untouched (the
+    # original stays on disk as a backup) and is what Alloy loads from now.
+    - name: Copy the operator's single config file into the directory
+      ansible.builtin.copy:
+        src: "{{ item.value }}"
+        dest: "{{ item.key }}"
+        remote_src: true
+        owner: "{{ alloy_user }}"
+        group: "{{ alloy_group }}"
+        mode: "0640"
+        force: false
+      loop: "{{ _alloy_live_files | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: _alloy_c_single
+      when: item.key != item.value
+
+    - name: Install this pack's validated files
+      ansible.builtin.copy:
+        src: "{{ _alloy_stage }}/{{ alloy_config_prefix }}{{ item }}"
+        dest: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item }}"
+        remote_src: true
+        owner: "{{ alloy_user }}"
+        group: "{{ alloy_group }}"
+        mode: "0640"
+      loop: "{{ alloy_pack_files | reject('in', _alloy_unwanted_files) | list }}"
+      register: _alloy_c_files
+
+    # Only this pack's own file is removed; preflight already refused a run
+    # where the name belongs to someone else.
+    - name: Remove this pack's configs for services that are gone
+      ansible.builtin.file:
+        path: "{{ alloy_confd_dir }}/{{ alloy_config_prefix }}{{ item }}"
+        state: absent
+      loop: "{{ _alloy_unwanted_files }}"
+      register: _alloy_c_removed
+      when: (alloy_confd_dir ~ '/' ~ alloy_config_prefix ~ item) in _alloy_pack_written
+
+    - name: Point CONFIG_FILE at the directory (adopt_file)
+      ansible.builtin.lineinfile:
+        path: "{{ alloy_env_file }}"
+        regexp: '^\s*CONFIG_FILE\s*='
+        line: 'CONFIG_FILE="{{ alloy_confd_dir }}"'
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: _alloy_c_env
+      when: _alloy_mode == 'adopt_file'
+
+    - name: Mark the LabDog config directory as managed
+      ansible.builtin.copy:
+        dest: "{{ alloy_confd_dir }}/{{ alloy_managed_marker }}"
+        content: |
+          # This directory is managed by LabDog's alloy-install action.
+          # Files starting with "{{ alloy_managed_header }}" are the action's;
+          # it never overwrites or deletes any other file here.
+        owner: "{{ alloy_user }}"
+        group: "{{ alloy_group }}"
+        mode: "0640"
+      when: _alloy_mode != 'adopt_dir'
+
+    - name: Create the systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/alloy.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: _alloy_run_as_root | bool
+
+    - name: Run Alloy as root on Docker hosts (socket access)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/alloy.service.d/override.conf
+        content: |
+          [Service]
+          User=root
+        owner: root
+        group: root
+        mode: "0644"
+      register: _alloy_c_override_on
+      when: _alloy_run_as_root | bool
+
+    - name: Remove the root drop-in on hosts without Docker
+      ansible.builtin.file:
+        path: /etc/systemd/system/alloy.service.d/override.conf
+        state: absent
+      register: _alloy_c_override_off
+      when: not _alloy_run_as_root | bool
+
+    - name: Work out whether Alloy needs a restart
+      vars:
+        _results: >-
+          {{ [_alloy_c_dir, _alloy_c_env, _alloy_c_override_on, _alloy_c_override_off]
+             + (_alloy_c_single.results | default([]))
+             + (_alloy_c_files.results | default([]))
+             + (_alloy_c_removed.results | default([])) }}
+      ansible.builtin.set_fact:
+        _alloy_changed: "{{ _results | selectattr('changed', 'defined') | selectattr('changed') | list | length > 0 }}"
+        _alloy_unit_changed: >-
+          {{ (_alloy_c_override_on is changed) or (_alloy_c_override_off is changed) or (_alloy_c_env is changed) }}
+
+    # Restart (or reload) here, not from a handler, so it happens inside this
+    # block: the health check right after sees the new process, and a failed
+    # start lands in the rescue below.
+    - name: Restart Alloy on the new config
+      ansible.builtin.systemd:
+        name: alloy
+        enabled: true
+        daemon_reload: true
+        state: >-
+          {{ 'reloaded' if (_alloy_reload_only | bool and not _alloy_unit_changed | bool
+                            and not _alloy_stopped_for_positions | default(false) | bool) else 'restarted' }}
+      when: >-
+        _alloy_changed | bool or not _alloy_was_active | bool
+        or _alloy_stopped_for_positions | default(false) | bool
+
+    - name: Keep Alloy enabled
+      ansible.builtin.systemd:
+        name: alloy
+        enabled: true
+      when: >-
+        not (_alloy_changed | bool or not _alloy_was_active | bool
+             or _alloy_stopped_for_positions | default(false) | bool)
+
+    - name: Check that Alloy came up on the new config
+      ansible.builtin.include_role:
+        name: role-alloy-linux-health
+      when: not ansible_check_mode
+
+  rescue:
+    - name: Put the previous config back
+      ansible.builtin.include_tasks: restore.yml
+      when: not ansible_check_mode and _alloy_backup is defined
+
+    - name: Fail the run
+      ansible.builtin.fail:
+        msg: >-
+          {{ ansible_failed_result.msg | default('Applying the new Alloy config failed.') }}
+          {{ _alloy_restore_report | default('') }}
+
+  always:
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ _alloy_stage }}"
+        state: absent
+      changed_when: false
+      check_mode: false
+      when: _alloy_stage is defined
+
+    # Kept when restoring failed, so the operator can recover by hand from it
+    # (its path is in the failure message).
+    - name: Remove the backup
+      ansible.builtin.file:
+        path: "{{ _alloy_backup }}"
+        state: absent
+      changed_when: false
+      when:
+        - _alloy_backup is defined
+        - not (_alloy_restore_failed | default(false) | bool)

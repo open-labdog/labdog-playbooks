@@ -1,74 +1,53 @@
 ---
+# Builds the config Alloy would load after this run, in a staging
+# directory: a copy of every file it loads today, with this pack's files
+# rendered over their own earlier versions. role-alloy-linux-validate
+# checks the staging copy as a whole before role-alloy-linux-apply touches
+# the live directory, so a file this pack doesn't manage that clashes with
+# the new config (say, one still referencing loki.write.default) stops the
+# run with the live config and the running Alloy untouched.
+#
+# Staging is scratch space, not the host's config, so it is built for real
+# in check mode too: a dry run validates the same config a real run would.
+
 - name: Resolve template source to bundled templates
   ansible.builtin.set_fact:
     _alloy_template_dir: "{{ role_path }}/templates"
-  tags:
-    - configure
 
-# --- Scenario 2 (adopt_file): switch a single-file install to directory mode.
-# Create labdog's directory, preserve the operator's existing config file by
-# copying it in untouched, then repoint CONFIG_FILE at the directory. The
-# original file is left on disk as a backup; the copy is what Alloy now loads.
-- name: Create labdog config directory (fresh / adopt_file)
-  ansible.builtin.file:
-    path: "{{ alloy_confd_dir }}"
+- name: Create the staging directory
+  ansible.builtin.tempfile:
     state: directory
-    owner: "{{ alloy_user }}"
-    group: "{{ alloy_group }}"
-    mode: "0755"
-  when: _alloy_mode != 'adopt_dir'
-  tags:
-    - configure
+    prefix: labdog-alloy-stage.
+  register: _alloy_stage_dir
+  changed_when: false  # scratch space, not the host's config
+  check_mode: false
 
-- name: Preserve the operator's existing config file in the new directory
+- name: Record the staging directory
+  ansible.builtin.set_fact:
+    _alloy_stage: "{{ _alloy_stage_dir.path }}"
+
+- name: Copy the files Alloy loads today into staging
   ansible.builtin.copy:
-    src: "{{ _alloy_current_config_target }}"
-    dest: "{{ alloy_confd_dir }}/{{ _alloy_current_config_target | basename }}"
+    src: "{{ item.value }}"
+    dest: "{{ _alloy_stage }}/{{ item.key | basename }}"
     remote_src: true
-    owner: "{{ alloy_user }}"
-    group: "{{ alloy_group }}"
-    mode: "0640"
-    force: false
-  when:
-    - _alloy_mode == 'adopt_file'
-    - _alloy_current_config_target | length > 0
-    - _alloy_target_stat.stat.exists | default(false)
-    - not (_alloy_target_stat.stat.isdir | default(false))
-  notify: Restart alloy
-  tags:
-    - configure
+    mode: "0600"
+  loop: "{{ _alloy_live_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  changed_when: false
+  check_mode: false
 
-- name: Point CONFIG_FILE at the directory (adopt_file)
-  ansible.builtin.lineinfile:
-    path: "{{ alloy_env_file }}"
-    regexp: '^\s*CONFIG_FILE\s*='
-    line: 'CONFIG_FILE="{{ alloy_confd_dir }}"'
-    create: true
-    owner: root
-    group: root
-    mode: "0644"
-  when: _alloy_mode == 'adopt_file'
-  notify: Restart alloy
-  tags:
-    - configure
-
-# --- Labdog ownership marker. Dropped only in directories labdog owns (fresh /
-# adopt_file). Its presence makes a later re-run treat the directory as managed
-# and keep the unprefixed layout instead of re-adopting it as an operator dir.
-- name: Mark the labdog config directory as managed
-  ansible.builtin.copy:
-    dest: "{{ alloy_confd_dir }}/{{ alloy_managed_marker }}"
-    content: |
-      # This directory is managed by LabDog's alloy-install action.
-      # Files here are owned by the action; do not edit by hand.
-    owner: "{{ alloy_user }}"
-    group: "{{ alloy_group }}"
-    mode: "0640"
-  when: _alloy_mode != 'adopt_dir'
-  tags:
-    - configure
-
-- name: Deploy base configuration files
-  ansible.builtin.include_tasks: base_configs.yml
-  tags:
-    - configure
+- name: Render this pack's base configs into staging
+  ansible.builtin.template:
+    src: "{{ _alloy_template_dir }}/{{ item }}.j2"
+    dest: "{{ _alloy_stage }}/{{ alloy_config_prefix }}{{ item }}"
+    mode: "0600"
+  loop:
+    - endpoints.alloy
+    - alloy.alloy
+    - linux_node_metrics.alloy
+    - linux_journal_logs.alloy
+    - linux_file_logs.alloy
+  changed_when: false
+  check_mode: false

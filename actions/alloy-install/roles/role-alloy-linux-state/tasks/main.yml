@@ -1,64 +1,57 @@
 ---
-# Pre-flight detection. Decides whether this is a fresh install or an
-# adoption of an Alloy that is already on the host, and — if adopting —
-# whether it already loads config from a directory (scenario 1) or from a
-# single file (scenario 2). Everything downstream keys off the facts set
-# here, so this role must run before repo/install/configure.
+# Read-only detection. Works out how Alloy is installed and configured
+# today, which files in its config are this pack's, and how to reach its
+# HTTP server. Nothing here changes the host; every probe runs in check
+# mode too (check_mode: false) so a dry run reports the same facts.
+#
+# Facts set here, used by every later role:
+#   _alloy_mode            fresh | adopt_dir | adopt_file
+#   alloy_confd_dir        the directory Alloy will load
+#   alloy_config_prefix    "" or "labdog_" (operator-owned directory)
+#   _alloy_live_files      {path in the directory: source path today}
+#   _alloy_pack_written    live paths whose first line is the pack header
+#   _alloy_reload_only     reload (SIGHUP) instead of restart
+#   _alloy_was_active      Alloy was running before this run
+#   _alloy_http            host:port of Alloy's HTTP server
 
 - name: Gather package facts
   ansible.builtin.package_facts:
     manager: auto
-  tags:
-    - always
 
 - name: Record whether the Alloy package is installed
   ansible.builtin.set_fact:
     _alloy_pkg_present: "{{ 'alloy' in ansible_facts.packages }}"
-  tags:
-    - always
+    _alloy_pkg_version: "{{ (ansible_facts.packages.alloy | default([{}]))[0].version | default('') }}"
 
 - name: Check for an existing Alloy environment file
   ansible.builtin.stat:
     path: "{{ alloy_env_file }}"
   register: _alloy_env_stat
-  tags:
-    - always
 
 - name: Read the existing Alloy environment file
   ansible.builtin.slurp:
     src: "{{ alloy_env_file }}"
   register: _alloy_env_slurp
   when: _alloy_env_stat.stat.exists
-  tags:
-    - always
 
-- name: Parse CONFIG_FILE out of the environment file
+- name: Parse CONFIG_FILE and the HTTP listen address out of the environment file
+  vars:
+    _env_text: "{{ _alloy_env_slurp.content | b64decode if _alloy_env_stat.stat.exists else '' }}"
+    _listen: >-
+      {{ _env_text | regex_search('--server\.http\.listen-addr[= ]([^\s"]+)', '\1') | default([], true) }}
   ansible.builtin.set_fact:
     _alloy_current_config_target: >-
-      {{ (_alloy_env_slurp.content | b64decode
-          | regex_search('^\s*CONFIG_FILE\s*=\s*"?([^"\n]+)"?\s*$', '\1', multiline=True))
-         | default('', true) | trim }}
-  when: _alloy_env_stat.stat.exists
-  tags:
-    - always
-
-# No environment file. If the package is present it is running on the deb's
-# built-in default config path, so assume that so adopt_file can preserve it;
-# otherwise (fresh host) there is nothing to adopt.
-- name: Default CONFIG_FILE target when no environment file exists
-  ansible.builtin.set_fact:
-    _alloy_current_config_target: "{{ alloy_default_config_file if _alloy_pkg_present | bool else '' }}"
-  when: not _alloy_env_stat.stat.exists
-  tags:
-    - always
+      {{ (_env_text | regex_search('^\s*CONFIG_FILE\s*=\s*"?([^"\n]+)"?\s*$', '\1', multiline=True)
+          | default([''], true))[0] | trim
+         if _alloy_env_stat.stat.exists
+         else (alloy_default_config_file if _alloy_pkg_present | bool else '') }}
+    _alloy_http: "{{ _listen[0] if _listen | length > 0 else alloy_http_listen_addr }}"
 
 - name: Stat the current config target
   ansible.builtin.stat:
     path: "{{ _alloy_current_config_target }}"
   register: _alloy_target_stat
   when: _alloy_current_config_target | length > 0
-  tags:
-    - always
 
 - name: Determine whether the current config target is a directory
   ansible.builtin.set_fact:
@@ -66,96 +59,117 @@
       {{ (_alloy_current_config_target | length > 0)
          and (_alloy_target_stat.stat.exists | default(false))
          and (_alloy_target_stat.stat.isdir | default(false)) }}
-  tags:
-    - always
 
-- name: Check whether the current config directory is labdog-managed
+# Every .alloy file in the directory Alloy loads today (or, for a
+# single-file install, in the directory it is about to load), so the new
+# config can be validated together with them and none of them is
+# overwritten.
+- name: List the Alloy files in the current config directory
+  ansible.builtin.find:
+    paths: "{{ _alloy_current_config_target if _alloy_target_is_dir | bool else alloy_confd_dir }}"
+    patterns: "*.alloy"
+    file_type: file
+  register: _alloy_found
+
+- name: Find which of them this pack wrote
+  ansible.builtin.command:
+    argv: >-
+      {{ ['awk', '-v', 'h=' ~ alloy_managed_header, 'FNR == 1 && index($0, h) == 1 { print FILENAME }']
+         + (_alloy_found.files | map(attribute='path') | sort) }}
+  register: _alloy_header_scan
+  changed_when: false
+  check_mode: false
+  when: _alloy_found.files | length > 0
+
+- name: Check whether the current config directory carries the LabDog marker
   ansible.builtin.stat:
     path: "{{ _alloy_current_config_target }}/{{ alloy_managed_marker }}"
   register: _alloy_marker_stat
   when: _alloy_target_is_dir | bool
-  tags:
-    - always
 
-# A directory is labdog-owned if it carries our marker, OR if it is exactly
-# our default path. The path check covers hosts installed by an older version
-# of this pack that wrote the fresh-install layout before the marker existed —
-# without it they would be misread as operator dirs and get a duplicate,
-# prefixed copy of every file. (alloy_confd_dir still holds its default here;
-# it is only reassigned after mode selection.)
-- name: Record labdog ownership of the current config directory
+# A directory is LabDog's when it has the marker, or when it holds one of
+# this pack's files under its bare name with the pack's header: that is a
+# host installed by an older version of this pack, before the marker. A
+# directory at the default path with neither is the operator's, even if it
+# is /etc/alloy/conf.d. (Earlier versions treated the default path as
+# LabDog's on sight, and overwrote operator files there.)
+- name: Record LabDog ownership of the current config directory
+  vars:
+    _written: "{{ _alloy_header_scan.stdout_lines | default([]) }}"
+    _bare_pack: >-
+      {{ alloy_pack_files | map('regex_replace', '^', _alloy_current_config_target ~ '/') | list }}
   ansible.builtin.set_fact:
+    _alloy_pack_written: "{{ _written }}"
     _alloy_dir_managed_by_labdog: >-
-      {{ ((_alloy_marker_stat.stat.exists | default(false)) | bool)
-         or (_alloy_target_is_dir | bool and _alloy_current_config_target == alloy_confd_dir) }}
-  tags:
-    - always
+      {{ (_alloy_target_is_dir | bool)
+         and ((_alloy_marker_stat.stat.exists | default(false))
+              or (_written | intersect(_bare_pack) | length > 0)) }}
 
 # Mode selection
-#   fresh      — package absent, or a labdog-owned directory (idempotent re-run)
-#   adopt_dir  — package present, already reading from an operator-owned directory
-#   adopt_file — package present, reading from a single file (or no directory yet)
+#   fresh      package absent, or a LabDog-owned directory (re-run)
+#   adopt_dir  package present, reading an operator-owned directory
+#   adopt_file package present, reading a single file (or nothing yet)
 - name: Select the install / adopt mode
   ansible.builtin.set_fact:
     _alloy_mode: >-
       {{ 'fresh'
          if (not _alloy_pkg_present | bool) or (_alloy_dir_managed_by_labdog | bool)
          else ('adopt_dir' if _alloy_target_is_dir | bool else 'adopt_file') }}
-  tags:
-    - always
 
-# Effective config directory:
-#   adopt_dir  — the operator's existing directory
-#   fresh / adopt_file — labdog's directory (created downstream for adopt_file)
-- name: Resolve the effective config directory
+- name: Resolve the effective config directory and filename prefix
   ansible.builtin.set_fact:
     alloy_confd_dir: >-
-      {{ _alloy_current_config_target if _alloy_mode == 'adopt_dir' else alloy_confd_dir }}
-  tags:
-    - always
-
-# Namespace labdog's own files only when dropping them into an operator-owned
-# directory, so we never clobber operator-authored configs. labdog-owned
-# directories keep the unprefixed fresh-install layout.
-- name: Resolve the labdog config filename prefix
-  ansible.builtin.set_fact:
+      {{ _alloy_current_config_target
+         if (_alloy_mode == 'adopt_dir' or _alloy_dir_managed_by_labdog | bool)
+         else alloy_confd_dir }}
     alloy_config_prefix: "{{ 'labdog_' if _alloy_mode == 'adopt_dir' else '' }}"
-  tags:
-    - always
 
-# Whether the installed unit supports `systemctl reload` (i.e. defines an
-# ExecReload). Drives the reload-vs-restart-fallback decision below so the
-# handler stays a single deterministic module call.
-- name: Query whether the Alloy unit can reload
+# {destination path: where its content comes from today}. In adopt_file
+# the operator's single file is copied into the new directory under its
+# own name; it must not collide with a file already there.
+- name: Record the files Alloy will load besides the ones this run writes
+  vars:
+    _in_dir: >-
+      {{ dict(_alloy_found.files | map(attribute='path') | zip(_alloy_found.files | map(attribute='path'))) }}
+    _single: "{{ alloy_confd_dir ~ '/' ~ (_alloy_current_config_target | basename) }}"
+    _single_exists: >-
+      {{ _alloy_mode == 'adopt_file'
+         and (_alloy_target_stat.stat.exists | default(false))
+         and not (_alloy_target_stat.stat.isdir | default(false)) }}
+  ansible.builtin.set_fact:
+    _alloy_live_files: >-
+      {{ _in_dir | combine({_single: _alloy_current_config_target} if _single_exists | bool else {}) }}
+
+- name: Query whether the Alloy unit is active and can reload
   ansible.builtin.command:
-    cmd: systemctl show alloy --property=CanReload --value
-  register: _alloy_can_reload
+    argv: [systemctl, show, alloy, --property=ActiveState, --property=CanReload]
+  register: _alloy_unit_show
   changed_when: false
   failed_when: false
-  when: _alloy_pkg_present | bool
-  tags:
-    - always
+  check_mode: false
 
-# Reload (SIGHUP, no downtime) is safe when we only add files to an
-# already-running directory-mode Alloy AND the unit can reload. Fresh
-# installs and single-file adoptions change CONFIG_FILE and must restart;
-# a unit without ExecReload also falls back to restart.
-- name: Decide whether a reload (vs restart) is sufficient
+- name: Record the unit state
+  vars:
+    _props: >-
+      {{ dict(_alloy_unit_show.stdout_lines | default([]) | select('search', '=')
+              | map('split', '=', 1) | list) }}
   ansible.builtin.set_fact:
+    _alloy_was_active: "{{ _props.ActiveState | default('') == 'active' }}"
+    # Reload (SIGHUP, no downtime) only when adding files to a running
+    # operator directory and the unit supports it. Fresh installs and
+    # single-file adoptions change CONFIG_FILE and must restart.
     _alloy_reload_only: >-
-      {{ (_alloy_mode == 'adopt_dir')
-         and ((_alloy_can_reload.stdout | default('no') | trim) == 'yes') }}
-  tags:
-    - always
+      {{ _alloy_mode == 'adopt_dir'
+         and _props.CanReload | default('no') == 'yes'
+         and _props.ActiveState | default('') == 'active' }}
 
 - name: Show detected Alloy state
   ansible.builtin.debug:
     msg:
-      - "package present: {{ _alloy_pkg_present }}"
+      - "package present: {{ _alloy_pkg_present }} {{ _alloy_pkg_version }}"
       - "current CONFIG_FILE: {{ _alloy_current_config_target | default('(none)', true) }}"
       - "mode: {{ _alloy_mode }}"
       - "effective config dir: {{ alloy_confd_dir }}"
       - "filename prefix: {{ alloy_config_prefix | default('(none)', true) }}"
+      - "files Alloy loads besides this pack's: {{ _alloy_live_files.keys() | difference(_alloy_pack_written) | list }}"
       - "reload only: {{ _alloy_reload_only }}"
-  tags:
-    - always

@@ -1,0 +1,41 @@
+---
+# Alloy releases before 1.11 have "alloy validate" but it doesn't resolve
+# references between components, so a file still pointing at
+# loki.write.default passes it and then stops Alloy at load. On those
+# releases this script runs as well: it lists every component the staged
+# files define and every reference to a component, and reports references
+# nothing defines. It is deliberately narrow (only component namespaces
+# Alloy ships, only three-part-or-longer references), because on 1.11+
+# Alloy's own check is the authority and this one doesn't run.
+alloy_validate_refs_below: "1.11.0"
+
+alloy_ref_check_script: |
+  import os, re, sys
+  NS = {"prometheus", "loki", "discovery", "local", "otelcol", "pyroscope",
+        "mimir", "faro", "beyla", "remote", "database_observability", "remotecfg"}
+  strip = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`', re.S)
+  define = re.compile(r'^\s*([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)\s+"([^"]+)"\s*\{', re.M)
+  ref = re.compile(r'(?<![\w.])([a-z][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*){2,})')
+  stage = sys.argv[1]
+  files = sorted(f for f in os.listdir(stage) if f.endswith(".alloy"))
+  texts = {f: open(os.path.join(stage, f), encoding="utf-8", errors="replace").read() for f in files}
+  defined = set()
+  for t in texts.values():
+      for typ, label in define.findall(t):
+          defined.add(typ + "." + label)
+  bad = 0
+  for f, t in texts.items():
+      body = strip.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), t)
+      for m in ref.finditer(body):
+          tok = m.group(1)
+          parts = tok.split(".")
+          if parts[0] not in NS:
+              continue
+          if re.match(r'\s*"', t[m.end():]):
+              continue  # a block header: type "label" {
+          if any(".".join(parts[:k]) in defined for k in range(3, len(parts) + 1)):
+              continue
+          line = body.count("\n", 0, m.start()) + 1
+          print(f"Error: {stage}/{f}:{line}: component \"{tok}\" does not exist or is out of scope")
+          bad += 1
+  sys.exit(1 if bad else 0)

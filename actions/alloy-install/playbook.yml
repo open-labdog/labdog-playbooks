@@ -11,35 +11,48 @@
           os_family={{ ansible_os_family }}. RHEL-family / other
           distros are not yet supported by this pack.
 
+  # Order matters. Everything up to and including role-alloy-linux-validate
+  # leaves the host's config and its running Alloy as they were (apart from
+  # installing the package on a host that has none), so a host that fails
+  # there is untouched. Only role-alloy-linux-apply changes the live config,
+  # and it puts the old one back if Alloy doesn't come up on the new one.
   roles:
-    # Detect whether Alloy is already installed and how it loads config.
-    # Sets _alloy_mode (fresh | adopt_dir | adopt_file) plus the effective
-    # config dir / filename prefix / reload-only facts everything else keys
-    # off. Must run first.
+    # Detect how Alloy is installed and configured today, and which of its
+    # files this pack wrote. Sets _alloy_mode (fresh | adopt_dir |
+    # adopt_file) and the facts everything else keys off. Read-only.
     - role: role-alloy-linux-state
 
-    # Add Grafana APT repository — only on a fresh install (skipped when
-    # adopting an existing Alloy, or in config-only mode).
+    # Refuse, before changing anything: missing or malformed URLs, a file
+    # this run would overwrite that the pack didn't write, existing
+    # pipelines that would ship twice, an Alloy without "alloy validate",
+    # and destinations this host can't reach (DNS, TCP, TLS + HTTP).
+    - role: role-alloy-linux-preflight
+
+    # Add the Grafana APT repository and install Alloy, on a host without
+    # it (skipped when adopting an existing Alloy, or in config-only mode).
     - role: role-alloy-linux-repo
       when:
         - not alloy_config_only | default(false) | bool
-        - _alloy_mode == 'fresh'
-
-    # Install the Alloy package from the Grafana APT repository.
+        - not _alloy_pkg_present | bool
     - role: role-alloy-linux-install
       when:
         - not alloy_config_only | default(false) | bool
-        - _alloy_mode == 'fresh'
+        - not _alloy_pkg_present | bool
 
-    # Deploy base configs.
-    - role: role-alloy-linux-configure
-
-    # Detect running services / listening ports.
+    # Detect running services (Docker).
     - role: role-alloy-linux-detect
       when: alloy_detect_services | default(true) | bool
 
-    # Deploy per-service config files (docker, mysql, postgresql, custom).
+    # Build the config Alloy would load in a staging directory: every file
+    # it loads today plus this pack's files, base and per-service.
+    - role: role-alloy-linux-configure
     - role: role-alloy-linux-services
 
-    # Manage the alloy systemd service.
-    - role: role-alloy-linux-service
+    # Validate the staging copy as one config. Stops here, untouched, if a
+    # file the pack doesn't manage breaks it.
+    - role: role-alloy-linux-validate
+
+    # Install the validated files, restart or reload Alloy, and check it is
+    # up and running them. On failure: restore, restart on the old config,
+    # fail the run.
+    - role: role-alloy-linux-apply

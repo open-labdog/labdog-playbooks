@@ -18,17 +18,30 @@ prometheus.remote_write "labdog" {
     }
 
     tls_config {
-      insecure_skip_verify = {{ alloy_tls_insecure_skip_verify | lower }}
+      insecure_skip_verify = {{ alloy_prometheus_tls_insecure_skip_verify | bool | lower }}
     }
+{% if alloy_drop_label_regex | default('', true) | length > 0 %}
+
+    // Labels that only add cardinality. cAdvisor copies every Docker label
+    // onto each container series, and image / compose metadata pushed some
+    // series past Mimir's default limit of 30 labels (HTTP 400 on push).
+    write_relabel_config {
+      action = "labeldrop"
+      regex  = "{{ alloy_drop_label_regex | trim }}"
+    }
+{% endif %}
   }
 }
 
 loki.write "labdog" {
   endpoint {
     url = "{{ alloy_loki_url }}"
+{% if alloy_loki_tenant_id | default('', true) | length > 0 %}
+    tenant_id = "{{ alloy_loki_tenant_id }}"
+{% endif %}
 
     tls_config {
-      insecure_skip_verify = {{ alloy_tls_insecure_skip_verify | lower }}
+      insecure_skip_verify = {{ alloy_loki_tls_insecure_skip_verify | bool | lower }}
     }
   }
 }

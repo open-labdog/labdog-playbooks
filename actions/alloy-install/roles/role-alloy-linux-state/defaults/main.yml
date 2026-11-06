@@ -1,18 +1,117 @@
 ---
-# Default config directory used for fresh installs and as the new directory
-# created when adopting a single-file install (scenario 2).
-alloy_confd_dir: /etc/alloy/conf.d
+# Shared settings for the whole action. role-alloy-linux-state runs first,
+# and Ansible exposes a role's defaults to the roles after it, so every
+# operator-facing knob lives here once.
 
-# Environment file that carries Alloy's CONFIG_FILE pointer. This is the
-# source of truth for "where does Alloy read its config from".
+# --- Destinations --------------------------------------------------------
+# LabDog fills these per host from the Mimir / Loki instances the host
+# resolves to (its own, its highest-priority group's, or the default).
+# Outside LabDog, pass them as extra-vars. There is no fallback URL: a run
+# without one fails before touching the host, rather than shipping to a
+# made-up "prometheus:9090".
+alloy_prometheus_url: ""
+alloy_loki_url: ""
+
+# Tenants, sent as X-Scope-OrgID. Mimir's conventional single-tenant value
+# is "anonymous". An empty Loki tenant sends no header (Loki's own
+# single-tenant mode), which is what this action did before it had one.
+alloy_mimir_org_id: "anonymous"
+alloy_loki_tenant_id: ""
+
+# Skip TLS certificate verification. The per-endpoint values default to the
+# shared one; LabDog sets them from each instance's "verify TLS" setting.
+alloy_tls_insecure_skip_verify: false
+alloy_prometheus_tls_insecure_skip_verify: "{{ alloy_tls_insecure_skip_verify }}"
+alloy_loki_tls_insecure_skip_verify: "{{ alloy_tls_insecure_skip_verify }}"
+
+# LabDog identity labels stamped on every shipped series and log line so
+# LabDog can query a host's data back. Injected by LabDog; empty outside it
+# (an empty label value is dropped, so nothing is added).
+labdog_host_id: ""
+labdog_hostname: "{{ inventory_hostname }}"
+
+# --- Existing Alloy configs ----------------------------------------------
+# Alloy files LabDog didn't write that define their own
+# prometheus.remote_write or loki.write already ship somewhere. Adding
+# LabDog's pipeline next to them would ship the same metrics and logs
+# twice, so the run fails and names them unless this is set.
+alloy_allow_existing_pipelines: false
+
+# Every file this pack writes starts with this line. A file without it was
+# written by someone else and is never overwritten or deleted.
+alloy_managed_header: "// Managed by Ansible"
+
+# Base names of the files this pack writes (alloy_config_prefix is added in
+# an operator-owned directory).
+alloy_pack_files:
+  - endpoints.alloy
+  - alloy.alloy
+  - linux_node_metrics.alloy
+  - linux_journal_logs.alloy
+  - linux_file_logs.alloy
+  - docker.alloy
+
+# Marker dropped inside a LabDog-owned config directory.
+alloy_managed_marker: .labdog-managed
+
+# --- Layout ----------------------------------------------------------------
+# Default config directory, used for fresh installs and as the directory a
+# single-file install is moved into. role-alloy-linux-state may repoint it
+# at an operator-owned directory.
+alloy_confd_dir: /etc/alloy/conf.d
+alloy_config_prefix: ""
+
+# Environment file that carries Alloy's CONFIG_FILE pointer.
 alloy_env_file: /etc/default/alloy
 
-# The Grafana deb's built-in default config path. Assumed as the current
-# target when the package is installed but the environment file is missing,
-# so adopt_file still preserves whatever the host was actually running.
+# The Grafana deb's built-in config path, assumed when the package is
+# installed but the environment file is missing.
 alloy_default_config_file: /etc/alloy/config.alloy
 
-# Marker file dropped inside a labdog-owned config directory. Its presence
-# tells a later re-run "this directory is mine" so we keep the unprefixed
-# fresh-install layout instead of treating it as an operator-owned dir.
-alloy_managed_marker: .labdog-managed
+# Where the Grafana deb's unit keeps component state (--storage.path).
+# Each component keeps its log positions / journal cursor under
+# <storage>/<component id>/.
+alloy_storage_path: /var/lib/alloy/data
+
+# Alloy's HTTP server, used for the readiness and config-load checks. Read
+# from --server.http.listen-addr in CUSTOM_ARGS when it is set there.
+alloy_http_listen_addr: 127.0.0.1:12345
+
+# Older versions of this pack named their components differently. Changing
+# a component's ID starts it with no saved position, which re-sends every
+# matching log file (with today's timestamp) or the journal's last 24h. A
+# host upgrading carries each old position directory over to the new ID.
+alloy_position_migrations:
+  - { from: loki.source.file.file_logs, to: loki.source.file.labdog_file_logs }
+  - { from: loki.source.journal.journal_logs, to: loki.source.journal.labdog_journal_logs }
+  - { from: loki.source.docker.default, to: loki.source.docker.labdog_docker }
+
+# --- Metrics ------------------------------------------------------------
+# cAdvisor copies every Docker label onto each container series. With
+# LabDog's two identity labels, image and compose metadata pushed some
+# series past Mimir's default limit of 30 labels, and pushes got a 400.
+# Dropped on the way out (write_relabel_config).
+alloy_drop_label_regex: >-
+  container_label_(org_opencontainers_image_(created|description|licenses|url)|org_label_schema_.*|com_docker_compose_(config_hash|oneoff|replace|version))
+
+# File log paths: glob patterns for file-based log collection.
+alloy_file_log_paths:
+  - "/var/log/{syslog,messages,*.log}"
+
+# File ownership
+alloy_user: alloy
+alloy_group: alloy
+
+# --- Checks -----------------------------------------------------------------
+# Reachability probe from the host to each endpoint (DNS, TCP, TLS + HTTP).
+alloy_probe_retries: 3
+alloy_probe_delay: 2
+alloy_probe_timeout: 5
+
+# After a restart: how long to wait for Alloy to report ready, and how long
+# it must then stay up without systemd restarting it. Alloy that cannot
+# load its config exits within a couple of seconds and systemd restarts it,
+# so a single "is-active" right after the restart proves nothing.
+alloy_ready_retries: 15
+alloy_ready_delay: 2
+alloy_settle_seconds: 8

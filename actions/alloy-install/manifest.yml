@@ -3,50 +3,71 @@ name: Install Alloy agent
 description: >-
   Installs and configures Grafana Alloy on Debian/Ubuntu hosts for basic
   monitoring: node metrics to Prometheus/Mimir and journal + file logs to
-  Loki, with optional Docker auto-detection. Adopts an Alloy that is already
-  installed: drops labdog's configs (namespaced) into an existing config
-  directory and reloads, or switches a single-file install to a directory and
-  restarts. Idempotent — re-running converges; set "Config only" to refresh
-  config without touching the package.
+  Loki, with optional Docker auto-detection. Each host ships to its own
+  destination (host, then group, then default). Adopts an Alloy that is
+  already installed without overwriting files it didn't write. Checks from
+  each host that its destinations are reachable and validates the combined
+  config before changing anything, and puts the old config back if Alloy
+  doesn't come up. Idempotent: re-running converges.
 icon: Activity
 playbook: playbook.yml
-version: "1.0"
+version: "1.1"
 estimated_duration: "1–3 min"
 destructive: true
 supports_group: true
 supports_host: true
 
+# The action checks Alloy after its own restart; LabDog runs this as the
+# post-run verify on hosts it snapshotted, and restores the snapshot if it
+# fails.
+verify_playbook: verify.yml
+verify_timeout_seconds: 120
+
 # Tie into LabDog's Grafana integration: LabDog fills these playbook vars
-# from its registered default Grafana instance at dispatch (so the operator
-# doesn't re-type URLs), and always injects labdog_host_id / labdog_hostname
-# so the shipped metrics are queryable back on the host page. Operator-
-# supplied values still win over the injected URLs.
+# per host from the Mimir / Loki instances that host ships to (its own
+# assignment, its highest-priority group's, or the default), and always
+# injects labdog_host_id / labdog_hostname so the shipped data is
+# queryable back on the host page. Operator-supplied values win.
 metrics_backend:
   prometheus_push_var: alloy_prometheus_url
   loki_push_var: alloy_loki_url
   org_id_var: alloy_mimir_org_id
+  loki_tenant_var: alloy_loki_tenant_id
+  prometheus_tls_skip_verify_var: alloy_prometheus_tls_insecure_skip_verify
+  loki_tls_skip_verify_var: alloy_loki_tls_insecure_skip_verify
 
 parameters:
   - key: alloy_prometheus_url
-    label: Prometheus/Mimir Write URL
+    label: Prometheus/Mimir destination
     type: string
-    required: true
-    help_text: Select a registered Mimir destination (configure under Integrations → Grafana).
+    help_text: >-
+      Leave on "each host's assigned destination" to send every host where its
+      host or group settings say (Integrations → Grafana registers them). Pick
+      one to send every host in this run there.
   - key: alloy_loki_url
-    label: Loki Write URL
+    label: Loki destination
     type: string
-    required: true
-    help_text: Select a registered Loki destination (configure under Integrations → Grafana).
+    help_text: >-
+      Leave on "each host's assigned destination" to send every host where its
+      host or group settings say. Pick one to send every host in this run there.
   - key: alloy_config_only
     label: Config only (skip install)
     type: bool
     default: false
-    help_text: Skip package install and only refresh /etc/alloy/conf.d/. Useful for config-only re-runs.
+    help_text: Skip package install and only refresh the config. Alloy must already be installed.
   - key: alloy_detect_services
     label: Auto-detect Docker
     type: bool
     default: true
     help_text: Detect a running Docker daemon and deploy its container metrics + log scrape config.
+  - key: alloy_allow_existing_pipelines
+    label: Allow existing pipelines
+    type: bool
+    default: false
+    help_text: >-
+      By default the run fails if Alloy files it didn't write already define
+      prometheus.remote_write or loki.write, because that ships everything
+      twice. Tick to add LabDog's pipeline next to them anyway.
 
 # After a successful run, register the package + service so labdog
 # manages them going forward (drift checks notice them, Host detail

@@ -1,21 +1,30 @@
 ---
 - name: Install prerequisite packages
   ansible.builtin.apt:
-    name:
-      - gpg
-      - apt-transport-https
-      - software-properties-common
+    name: "{{ alloy_apt_prerequisites }}"
     state: present
     update_cache: true
+    cache_valid_time: 3600
+  when: alloy_apt_prerequisites | length > 0
+
+- name: Create the APT keyring directory
+  ansible.builtin.file:
+    path: "{{ alloy_apt_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: alloy_apt_key_url | length > 0
 
 - name: Add Grafana GPG key
   ansible.builtin.get_url:
-    url: https://apt.grafana.com/gpg-full.key
-    dest: /etc/apt/keyrings/grafana.asc
+    url: "{{ alloy_apt_key_url }}"
+    dest: "{{ alloy_apt_keyring }}"
     mode: "0644"
+  when: alloy_apt_key_url | length > 0
 
 - name: Add Grafana APT repository
   ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+    repo: "{{ alloy_apt_repo }}"
     filename: grafana
     state: present
