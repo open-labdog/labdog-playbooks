@@ -18,7 +18,7 @@
   register: _k8s_cp_nodes_probe
   changed_when: false
   check_mode: false
-  when: not report_only | bool
+  when: not k8s_preview | bool
 
 - name: Every control-plane kubelet is on the target version
   vars:
@@ -32,4 +32,4 @@
       Control-plane nodes not yet on v{{ target_version }}:
       {{ _behind | join(', ') }}. Workers are left alone until they are,
       because a kubelet must not be newer than its API server.
-  when: not report_only | bool
+  when: not k8s_preview | bool

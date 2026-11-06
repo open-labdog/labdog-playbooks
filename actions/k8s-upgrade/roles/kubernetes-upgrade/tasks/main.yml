@@ -48,7 +48,7 @@
 - name: Upgrade the node
   when:
     - not _k8s_already_on_target
-    - not report_only | bool
+    - not k8s_preview | bool
   block:
     - name: Cordon and drain
       ansible.builtin.import_tasks: drain.yml
@@ -83,4 +83,4 @@
   when:
     - _k8s_already_on_target
     - _k8s_cordoned_by_us
-    - not report_only | bool
+    - not k8s_preview | bool

@@ -53,7 +53,7 @@ See [`manifest.yml`](./manifest.yml).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `target_version` | string | required | Semver only (e.g. `1.30.4`). At most one minor above the running control plane. |
-| `report_only` | bool | `false` | Run every check and print what each node would do, without changing anything. Use this instead of LabDog's dry-run toggle, which does not reach the playbook. |
+| `report_only` | bool | `false` | Run every check and print what each node would do, without changing anything. A real `--check` run (LabDog's dry run, once it passes `--check`) does the same. Older LabDog dry runs set `ansible_check_mode` as an extra-var, which ansible-core ignores, so they upgrade for real: use `report_only` there. |
 | `skip_preflight` | bool | `false` | Bypass the per-node checks. The apt cache is still refreshed. |
 | `drain_timeout` | int | `300` | Seconds `kubectl drain` may take. |
 | `drain_force` | bool | `false` | Pass `--force` to `kubectl drain`, deleting pods no controller manages. |
