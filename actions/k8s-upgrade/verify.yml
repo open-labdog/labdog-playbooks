@@ -6,7 +6,7 @@
 # rolls that member back to its pre-run VM snapshot, so it must only
 # fail for a node this run actually upgraded:
 #
-#   * report_only → nothing changed; pass.
+#   * report_only or --check → nothing changed; pass.
 #   * kubelet not on target → this run never reached the node (an
 #     earlier node failed and stopped the run); pass. Rolling back an
 #     untouched control-plane node would restore an older etcd member.
@@ -25,7 +25,7 @@
   tasks:
     - name: Nothing to verify in report-only mode
       ansible.builtin.meta: end_play
-      when: report_only | bool
+      when: report_only | bool or ansible_check_mode
 
     - name: Probe the kubelet version
       ansible.builtin.command:

@@ -38,8 +38,8 @@ parameters:
     default: false
     help_text: >-
       Check the cluster and list what each node would do, without
-      cordoning, installing or restarting anything. Use this rather than
-      LabDog's dry-run toggle, which does not reach the playbook.
+      cordoning, installing or restarting anything. LabDog's dry-run
+      toggle does the same on LabDog releases that pass --check.
   - key: skip_preflight
     label: Skip preflight checks
     type: bool

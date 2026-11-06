@@ -1,7 +1,7 @@
 ---
 # Cluster-wide checks, run once on the driver (first control-plane
 # node) before any node is cordoned. Read-only, so they also run in
-# report_only mode. Every check here used to be left to kubeadm, which
+# preview mode (report_only or --check). Every check here used to be left to kubeadm, which
 # only runs on the first control-plane node and only after it has been
 # drained.
 
@@ -122,7 +122,7 @@
       {{ groups['k8s_control_plane'] | join(', ') }};
       {{ groups['k8s_worker'] | default([]) | length }} worker(s).
       {% if _k8s_missing %}Left out: {{ _k8s_missing | join(', ') }}.{% endif %}
-      {{ 'Report only: nothing will be changed.' if report_only | bool else '' }}
+      {{ 'Preview (report only or --check): nothing will be changed.' if k8s_preview | bool else '' }}
 
 - name: Warn about VM rollback of stacked-etcd control-plane nodes
   # Restoring one member of a multi-member etcd cluster from a VM
