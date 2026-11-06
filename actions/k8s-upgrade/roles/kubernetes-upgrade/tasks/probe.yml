@@ -1,0 +1,33 @@
+---
+# Read-only: where this node stands before the role changes anything.
+
+- name: Probe current kubelet version
+  ansible.builtin.command:
+    argv: [kubelet, --version]
+  register: _k8s_kubelet_probe
+  changed_when: false
+  failed_when: false   # absent kubelet binary ⇒ not on target, upgrade it
+  check_mode: false
+
+- name: Read the node object
+  ansible.builtin.command:
+    argv: [kubectl, get, node, "{{ inventory_hostname }}", -o, json]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_node_probe
+  changed_when: false
+  check_mode: false
+
+- name: Work out the node's state
+  vars:
+    _node: "{{ _k8s_node_probe.stdout | from_json }}"
+    # "Kubernetes v1.30.4" → "v1.30.4". Compared exactly, so v1.30.4
+    # never matches v1.30.40.
+    _words: "{{ _k8s_kubelet_probe.stdout | default('') | split }}"
+  ansible.builtin.set_fact:
+    _k8s_current: "{{ _words[-1] if _k8s_kubelet_probe.rc == 0 and _words | length > 0 else '' }}"
+    _k8s_already_on_target: "{{ _k8s_kubelet_probe.rc == 0 and _words | length > 0 and _words[-1] == 'v' + target_version }}"
+    _k8s_was_unschedulable: "{{ _node.spec.unschedulable | default(false) | bool }}"
+    _k8s_cordoned_by_us: "{{ (_node.metadata.annotations | default({}))[k8s_cordon_annotation] | default('') == 'true' }}"
+    _k8s_touched: false

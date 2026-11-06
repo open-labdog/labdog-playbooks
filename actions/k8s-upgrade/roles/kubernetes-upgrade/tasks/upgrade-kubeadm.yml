@@ -1,0 +1,50 @@
+---
+# kubeadm first, on every node. The first control-plane node runs
+# ``kubeadm upgrade plan`` (which validates the upgrade graph) and
+# ``kubeadm upgrade apply``, after an etcd snapshot. Every other node,
+# control plane or worker, runs ``kubeadm upgrade node``, which pulls
+# the already-upgraded cluster configuration.
+
+- name: Release the hold on kubeadm
+  # The packages stay held outside this action so an unrelated
+  # unattended-upgrade can't move them. dpkg_selections only reports a
+  # change when the selection actually changes.
+  ansible.builtin.dpkg_selections:
+    name: kubeadm
+    selection: install
+
+- name: Install kubeadm pinned to {{ target_version }}
+  ansible.builtin.apt:
+    name: "kubeadm={{ target_version }}-{{ kube_apt_version_suffix }}"
+    state: present
+    allow_change_held_packages: true
+    update_cache: false
+
+- name: Hold kubeadm again
+  ansible.builtin.dpkg_selections:
+    name: kubeadm
+    selection: hold
+
+- name: Snapshot etcd before the control plane moves
+  ansible.builtin.import_tasks: etcd-backup.yml
+  when: inventory_hostname == k8s_driver
+
+- name: Run kubeadm upgrade plan on the first CP
+  # Read-only; failures mean the target is not a valid upgrade from
+  # here. Surface the error and stop before apply.
+  ansible.builtin.command:
+    argv: [kubeadm, upgrade, plan, "v{{ target_version }}"]
+  when: inventory_hostname == k8s_driver
+  changed_when: false
+
+- name: Run kubeadm upgrade apply on the first CP — v{{ target_version }}
+  ansible.builtin.command:
+    argv: [kubeadm, upgrade, apply, "v{{ target_version }}", --yes]
+  when: inventory_hostname == k8s_driver
+  changed_when: true
+
+- name: Run kubeadm upgrade node
+  ansible.builtin.command:
+    argv: [kubeadm, upgrade, node]
+  when: inventory_hostname != k8s_driver
+  changed_when: true

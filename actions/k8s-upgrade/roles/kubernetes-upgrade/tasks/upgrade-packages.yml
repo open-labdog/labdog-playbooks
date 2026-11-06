@@ -4,10 +4,11 @@
 # matching version. They MUST be the same minor as kubeadm to keep the
 # kubelet talking to the API server.
 
-- name: Unhold kubelet + kubectl
-  ansible.builtin.command: apt-mark unhold kubelet kubectl
-  changed_when: true
-  failed_when: false
+- name: Release the hold on kubelet and kubectl
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: install
+  loop: [kubelet, kubectl]
 
 - name: Install kubelet and kubectl pinned to {{ target_version }}
   ansible.builtin.apt:
@@ -17,10 +18,9 @@
     state: present
     allow_change_held_packages: true
     update_cache: false
-  notify:
-    - Reload systemd
-    - Restart kubelet
 
-- name: Hold kubelet + kubectl
-  ansible.builtin.command: apt-mark hold kubelet kubectl
-  changed_when: true
+- name: Hold kubelet and kubectl again
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [kubelet, kubectl]

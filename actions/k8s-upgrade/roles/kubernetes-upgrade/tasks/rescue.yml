@@ -1,0 +1,44 @@
+---
+# A step of the upgrade failed. Cordon state lives in the API server,
+# not on the node, so a LabDog VM rollback would not undo it: clean it
+# up here when that is safe, and say what was left behind when not.
+
+- name: Uncordon the node — nothing on it changed yet
+  # The failure came before kubeadm or any package was touched (drain
+  # timed out on a PodDisruptionBudget, say), so the node can go
+  # straight back into service.
+  ansible.builtin.command:
+    argv: [kubectl, uncordon, "{{ inventory_hostname }}"]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  changed_when: true
+  when:
+    - not _k8s_touched
+    - _k8s_cordoned_by_us
+
+- name: Drop the cordon annotation
+  ansible.builtin.command:
+    argv: [kubectl, annotate, node, "{{ inventory_hostname }}", "{{ k8s_cordon_annotation }}-"]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  changed_when: true
+  when:
+    - not _k8s_touched
+    - _k8s_cordoned_by_us
+
+- name: Stop the run
+  ansible.builtin.fail:
+    msg: >-
+      Upgrading {{ inventory_hostname }} failed at
+      "{{ ansible_failed_task.name | default('unknown task') }}":
+      {{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('no message')) }}
+      {% if not _k8s_touched %}Nothing on the node had changed yet, so it
+      was {{ 'uncordoned again' if _k8s_cordoned_by_us else 'left cordoned, as it was before the run' }}.
+      Fix the cause and re-run.{% else %}kubeadm or the kube packages had
+      already started to change, so the node stays cordoned (annotated
+      {{ k8s_cordon_annotation }}). Fix the cause and re-run with the same
+      target_version: nodes already on target are skipped, and a
+      cordoned one that reached the target is uncordoned.{% endif %}
+      No other node was touched after this one.

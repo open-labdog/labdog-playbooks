@@ -1,0 +1,141 @@
+---
+# Cluster-wide checks, run once on the driver (first control-plane
+# node) before any node is cordoned. Read-only, so they also run in
+# report_only mode. Every check here used to be left to kubeadm, which
+# only runs on the first control-plane node and only after it has been
+# drained.
+
+- name: Verify the parameters
+  ansible.builtin.assert:
+    that:
+      - target_version is match("^[0-9]+\.[0-9]+\.[0-9]+$")
+      - etcd_backup_dir is match("^/")
+      - drain_timeout | int > 0
+    fail_msg: >-
+      target_version must be a semver like "1.30.4" (got
+      "{{ target_version }}"), etcd_backup_dir an absolute path (got
+      "{{ etcd_backup_dir }}"), and drain_timeout a positive number of
+      seconds (got "{{ drain_timeout }}").
+
+- name: Read the API server version
+  ansible.builtin.command:
+    argv: [kubectl, version, -o, json]
+  register: _k8s_version_probe
+  changed_when: false
+  check_mode: false
+
+- name: Read every node
+  ansible.builtin.command:
+    argv: [kubectl, get, nodes, -o, json]
+  register: _k8s_nodes_probe
+  changed_when: false
+  check_mode: false
+
+- name: Work out membership and versions
+  ansible.builtin.set_fact:
+    _k8s_server_version: >-
+      {{ (_k8s_version_probe.stdout | from_json).serverVersion.gitVersion
+         | regex_search('[0-9]+\.[0-9]+\.[0-9]+') }}
+    _k8s_api_nodes: >-
+      {{ (_k8s_nodes_probe.stdout | from_json)['items']
+         | map(attribute='metadata.name') | list }}
+    _k8s_inventory_nodes: "{{ groups['k8s_control_plane'] + groups['k8s_worker'] | default([]) }}"
+
+- name: Work out the version floor and the offenders
+  vars:
+    _tgt: "{{ target_version.split('.') | map('int') | list }}"
+    _srv: "{{ _k8s_server_version.split('.') | map('int') | list }}"
+    _nodes: "{{ (_k8s_nodes_probe.stdout | from_json)['items'] }}"
+    # Kubelets may run up to three minors behind the API server.
+    _kubelet_floor: "v{{ _tgt[0] }}.{{ [(_tgt[1] | int) - 3, 0] | max }}.0"
+  ansible.builtin.set_fact:
+    _k8s_tgt: "{{ _tgt }}"
+    _k8s_srv: "{{ _srv }}"
+    _k8s_unknown: "{{ _k8s_inventory_nodes | difference(_k8s_api_nodes) }}"
+    _k8s_missing: "{{ _k8s_api_nodes | difference(_k8s_inventory_nodes) }}"
+    _k8s_kubelets_too_new: >-
+      {{ _nodes | selectattr('status.nodeInfo.kubeletVersion', 'version', 'v' + target_version, '>')
+         | map(attribute='metadata.name') | list }}
+    _k8s_kubelets_too_old: >-
+      {{ _nodes | selectattr('status.nodeInfo.kubeletVersion', 'version', _kubelet_floor, '<')
+         | map(attribute='metadata.name') | list }}
+
+- name: Every inventory hostname is a Kubernetes node
+  # LabDog treats inventory hostnames and Kubernetes node names as
+  # identical. If they differ (DNS short vs FQDN, or operator
+  # mistake during cluster bootstrap) every kubectl drain/uncordon
+  # would target a non-existent node, so fail fast.
+  ansible.builtin.assert:
+    that: _k8s_unknown | length == 0
+    fail_msg: >-
+      These LabDog hosts are not Kubernetes nodes by that name:
+      {{ _k8s_unknown | join(', ') }}. Inventory hostnames must equal
+      node names. Cluster nodes: {{ _k8s_api_nodes | join(', ') }}.
+
+- name: Every Kubernetes node is in the run
+  # LabDog drops a host from the inventory when its snapshot fails, and
+  # a group may simply not hold every node. Either way the cluster would
+  # end the run half upgraded, so refuse unless the operator opted in.
+  ansible.builtin.assert:
+    that: _k8s_missing | length == 0 or allow_partial_group | bool
+    fail_msg: >-
+      These cluster nodes are not in this run: {{ _k8s_missing | join(', ') }}.
+      Add them to the LabDog group (or check whether their snapshot
+      failed), or turn on "Allow nodes outside the group" to leave them
+      on their current version.
+
+- name: The target is not a downgrade and skips no minor
+  ansible.builtin.assert:
+    that:
+      - _k8s_tgt[0] == _k8s_srv[0]
+      - target_version is version(_k8s_server_version, '>=')
+      - (_k8s_tgt[1] | int) - (_k8s_srv[1] | int) <= 1
+    fail_msg: >-
+      The control plane runs v{{ _k8s_server_version }}. kubeadm upgrades
+      one minor at a time and never downgrades, so v{{ target_version }}
+      is not a valid target. Upgrade to the latest
+      {{ _k8s_srv[0] }}.{{ (_k8s_srv[1] | int) + 1 }}.x first.
+
+- name: No kubelet would fall out of the supported skew
+  ansible.builtin.assert:
+    that:
+      - _k8s_kubelets_too_new | length == 0
+      - _k8s_kubelets_too_old | length == 0
+    # Always starts with text: in ansible-core 2.21 a template that
+    # renders empty becomes null, which assert rejects as a fail_msg.
+    fail_msg: >-
+      Kubelet version skew. Newer than v{{ target_version }}:
+      {{ _k8s_kubelets_too_new | join(', ') or 'none' }}. More than three
+      minors behind v{{ target_version }}, which the upgraded API server
+      would not support: {{ _k8s_kubelets_too_old | join(', ') or 'none' }}.
+
+- name: Look for stacked etcd
+  ansible.builtin.stat:
+    path: /etc/kubernetes/manifests/etcd.yaml
+  register: _k8s_etcd_manifest
+
+- name: Report the plan
+  ansible.builtin.debug:
+    msg: >-
+      Cluster on v{{ _k8s_server_version }}, target v{{ target_version }}.
+      {{ groups['k8s_control_plane'] | length }} control-plane node(s):
+      {{ groups['k8s_control_plane'] | join(', ') }};
+      {{ groups['k8s_worker'] | default([]) | length }} worker(s).
+      {% if _k8s_missing %}Left out: {{ _k8s_missing | join(', ') }}.{% endif %}
+      {{ 'Report only: nothing will be changed.' if report_only | bool else '' }}
+
+- name: Warn about VM rollback of stacked-etcd control-plane nodes
+  # Restoring one member of a multi-member etcd cluster from a VM
+  # snapshot brings back an older raft log under the same member ID,
+  # which etcd refuses. That needs a manual member remove and re-add.
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: this cluster has {{ groups['k8s_control_plane'] | length }}
+      control-plane nodes with stacked etcd. If a control-plane node fails,
+      LabDog's snapshot rollback would restore it and break its etcd
+      member. Run this action with snapshots turned off for HA clusters;
+      the etcd snapshot written to {{ etcd_backup_dir }} on
+      {{ inventory_hostname }} is the recovery path.
+  when:
+    - _k8s_etcd_manifest.stat.exists
+    - groups['k8s_control_plane'] | length > 1

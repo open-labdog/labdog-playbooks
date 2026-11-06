@@ -1,0 +1,35 @@
+---
+# Gate between the control-plane and worker plays. A kubelet must never
+# be newer than the API server it talks to, so no worker moves until
+# every control-plane kubelet reports the target version.
+# any_errors_fatal already stops the run when a control-plane node
+# fails; this catches the rest (a node left out of the run, or one the
+# operator rolled back by hand).
+
+- name: Read the control-plane kubelet versions
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - nodes
+      - --selector=node-role.kubernetes.io/control-plane
+      - -o
+      - json
+  register: _k8s_cp_nodes_probe
+  changed_when: false
+  check_mode: false
+  when: not report_only | bool
+
+- name: Every control-plane kubelet is on the target version
+  vars:
+    _behind: >-
+      {{ (_k8s_cp_nodes_probe.stdout | from_json)['items']
+         | rejectattr('status.nodeInfo.kubeletVersion', 'equalto', 'v' + target_version)
+         | map(attribute='metadata.name') | list }}
+  ansible.builtin.assert:
+    that: _behind | length == 0
+    fail_msg: >-
+      Control-plane nodes not yet on v{{ target_version }}:
+      {{ _behind | join(', ') }}. Workers are left alone until they are,
+      because a kubelet must not be newer than its API server.
+  when: not report_only | bool

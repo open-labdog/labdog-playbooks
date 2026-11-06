@@ -16,24 +16,35 @@ the LabDog UI.
 ## What it does
 
 1. **Discovers cluster topology**: probes every node for
-   `/etc/kubernetes/manifests/kube-apiserver.yaml`. Nodes that have
-   it are control-plane; nodes that don't are workers. Uses
-   `add_host` to build the in-memory `k8s_control_plane` and
-   `k8s_worker` groups for the rest of the playbook. Refuses if no
-   control-plane node is detected.
-2. **Validates prerequisites** on the first control-plane node:
-   `target_version` looks like a semver, `kubectl` is on `PATH`, and
-   every Ansible inventory hostname matches an existing Kubernetes
-   node name.
-3. **Upgrades control-plane nodes serially** (`serial: 1`) via the
-   `kubernetes-upgrade` role with `node_role=control_plane`.
-4. **Upgrades worker nodes serially** (`serial: 1`) via the same role
-   with `node_role=worker`.
+   `/etc/kubernetes/manifests/kube-apiserver.yaml` and sorts it into
+   `k8s_control_plane` or `k8s_worker` with `group_by`. Refuses if no
+   control-plane node is detected. The alphabetically first
+   control-plane node is the *driver*: every `kubectl` call and
+   `kubeadm upgrade apply` run there, and it is upgraded first.
+2. **Validates the cluster** on the driver, before any node is touched:
+   - `target_version` is a semver, at most one minor above the running
+     API server, and not a downgrade;
+   - every inventory hostname is a Kubernetes node name, and every
+     Kubernetes node is in the run (unless `allow_partial_group`);
+   - no kubelet is newer than the target, or more than three minors
+     behind it;
+   - prints the plan, and a warning for HA clusters with stacked etcd
+     (see [Rollback](#rollback)).
+3. **Upgrades control-plane nodes serially**, then checks that every
+   control-plane kubelet is on target, then **upgrades workers
+   serially**. Each node: refresh the apt cache, preflight (kubelet
+   running; `kubeadm`, `kubelet`, `kubectl` downloadable at the
+   target), cordon and drain, install `kubeadm`, `kubeadm upgrade`,
+   install `kubelet` and `kubectl`, restart kubelet, wait for Ready,
+   uncordon. The packages are held again afterwards.
+4. **Snapshots etcd** on the first control-plane node right before
+   `kubeadm upgrade apply`, when etcd is stacked (a kubeadm static
+   pod). The snapshot is written with the etcd image's own `etcdctl`
+   through `crictl`, to `etcd_backup_dir`. With external etcd the
+   action says so and takes no snapshot.
 
-The playbook never upgrades two nodes concurrently — Kubernetes
-requires this. `kubectl drain` / `uncordon` / wait-Ready tasks
-delegate to the first control-plane host so a kubeconfig only needs
-to live there, not on every worker.
+Any failed node stops the whole run (`serial: 1` plus
+`any_errors_fatal`), so no later node is touched.
 
 ## Manifest parameters
 
@@ -41,74 +52,92 @@ See [`manifest.yml`](./manifest.yml).
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `target_version` | string | required | Semver only (e.g. `1.30.4`). Must already be downloadable from the apt repo configured on every node. |
-| `skip_preflight` | bool | `false` | Bypass per-node sanity checks. Use sparingly. |
-| `drain_timeout` | int | `300` | Maximum seconds to wait for `kubectl drain` to evict pods. |
+| `target_version` | string | required | Semver only (e.g. `1.30.4`). At most one minor above the running control plane. |
+| `report_only` | bool | `false` | Run every check and print what each node would do, without changing anything. Use this instead of LabDog's dry-run toggle, which does not reach the playbook. |
+| `skip_preflight` | bool | `false` | Bypass the per-node checks. The apt cache is still refreshed. |
+| `drain_timeout` | int | `300` | Seconds `kubectl drain` may take. |
+| `drain_force` | bool | `false` | Pass `--force` to `kubectl drain`, deleting pods no controller manages. |
+| `etcd_backup_dir` | string | `/var/lib/labdog/etcd-backups` | Absolute path on the first control-plane node for the etcd snapshot. |
+| `allow_partial_group` | bool | `false` | Proceed when the cluster has nodes outside the targeted group. They stay on their current version. |
 
-## Targeting
+The manifest sets `playbook_timeout_seconds: 7200`, which covers about
+six nodes at the 20-minute worst case. For a bigger cluster, raise it in
+a copy of the action or raise LabDog's global `ansible.playbook_timeout`.
 
-- `supports_group: true`, `supports_host: false` — the group flag
-  exposes the action on the group view; the host flag, set to false,
-  tells LabDog to dispatch the playbook in a single ansible-playbook
-  invocation against all members (instead of the per-host fan-out the
-  other actions in this pack use). Cluster-wide coordination
-  (`serial:`, `add_host`, `delegate_to`, `run_once`) lives entirely
-  inside this playbook — LabDog's involvement ends at "give the
-  playbook a flat inventory of every host in the group."
-- `destructive: true` — LabDog applies its standard per-host
-  snapshot/verify/rollback envelope to every member that has a
-  Proxmox VM mapping. On failure, only the affected node rolls back;
-  successfully-upgraded nodes keep their state. The operator inspects
-  the partial outcome, fixes whatever broke node N, and re-runs the
-  action against the same group; the role's idempotency check skips
-  nodes already on the target version, so the re-run only touches
-  the still-pending ones.
+## Failures and re-runs
 
-## Re-run after partial failure
+The node being upgraded carries the annotation
+`labdog.io/k8s-upgrade-cordoned=true` from just before the action
+cordons it until just after it uncordons it. A node the operator had
+already cordoned never gets the annotation, so the action leaves it
+cordoned when it is done.
 
-The role probes each node's `kubelet --version` at the start; if it
-already reports `v{target_version}`, the role short-circuits and
-marks the node as done. This makes the typical recovery flow
-straightforward:
+When a node fails:
 
-1. Run `k8s-upgrade` against the group. Node 3 fails mid-upgrade.
-2. LabDog rolls back node 3 from its pre-action snapshot (auto, if
-   `auto_rollback` was on). Nodes 1 and 2 keep the new version.
-3. Operator investigates node 3, fixes the underlying issue.
-4. Operator re-runs `k8s-upgrade` with the same `target_version`
-   against the same group. The role skips nodes 1 and 2 (already on
-   target), then attempts node 3, then proceeds to nodes 4 and 5.
+- **before anything changed on it** (drain timed out on a
+  PodDisruptionBudget, say) the action uncordons it again;
+- **after kubeadm or the packages started to change** it stays cordoned
+  and annotated.
 
-If the operator instead wants to revert the cluster to the
-pre-upgrade state, they roll back nodes 1 and 2 manually from
-Proxmox — LabDog deletes succeeded-host snapshots after the run
-unless an explicit "preserve" toggle is added later.
+Either way the run stops and says which case it was. Re-run with the
+same `target_version`: nodes already on the target kubelet are skipped,
+and a node on target that still carries the annotation is waited on
+until Ready and uncordoned. The version check is exact, so `v1.30.4`
+never matches `v1.30.40`.
+
+## Rollback
+
+`destructive: true`, so LabDog snapshots every member that has a
+Proxmox VM mapping before the run, runs [`verify.yml`](./verify.yml)
+per member afterwards, and restores a member whose playbook or verify
+failed. `verify.yml` only checks nodes this run upgraded (kubelet on
+target → active and Ready); a node the run never reached passes, so an
+aborted run does not restore untouched nodes.
+
+Restoring a **worker** is safe: the node comes back on the old version
+and rejoins, and a re-run upgrades it again. Restoring the only
+control-plane node of a **single-control-plane** cluster restores etcd
+as a whole, which is consistent.
+
+Restoring one control-plane node of an **HA cluster with stacked
+etcd** is not safe. It brings back an etcd member with an older raft
+log under the same member ID, which etcd refuses, and that needs a
+manual member remove and re-add. For those clusters, run the action
+with LabDog snapshots turned off and use the etcd snapshot in
+`etcd_backup_dir` as the recovery path. The validation step prints a
+warning when it sees such a cluster. The snapshot lives on the first
+control-plane node, so a VM rollback of that node erases it too: point
+`etcd_backup_dir` at storage that lives elsewhere if you can.
+
+LabDog deletes the snapshots of members that succeeded once the run is
+done, so reverting the whole cluster afterwards is a manual Proxmox job.
 
 ## Requirements
 
 - **OS**: Debian / Ubuntu on every node (`apt`-managed
-  `kubeadm`/`kubelet`/`kubectl`).
+  `kubeadm`/`kubelet`/`kubectl` from the pkgs.k8s.io repo for the target
+  minor).
 - **Inventory**: every node's Ansible hostname must equal its
-  Kubernetes node name. The preflight asserts this and fails fast on
-  mismatch (DNS short vs FQDN, operator typos at bootstrap).
-- **kubeconfig**: `/etc/kubernetes/admin.conf` on every control-plane
-  node — the playbook sets `KUBECONFIG` to that path.
+  Kubernetes node name. The validation step fails fast on mismatch.
+- **kubeconfig**: `/etc/kubernetes/admin.conf` on the first
+  control-plane node.
+- **crictl** on the first control-plane node for the etcd snapshot
+  (kubeadm installs it).
 - **Privileges**: sudo/root on every node.
 
 ## Role
 
-The single role that does the work lives at
-[`roles/kubernetes-upgrade/`](./roles/kubernetes-upgrade/) — private
-to this action. It's a useful template for adding RHEL-family support
-(currently on the LabDog roadmap): copy it, swap `apt` for `dnf`, and
-sibling it as `roles/kubernetes-upgrade-rhel/`.
+The role that does the work lives at
+[`roles/kubernetes-upgrade/`](./roles/kubernetes-upgrade/), private
+to this action. `tasks/validate.yml` holds the cluster-wide checks,
+`tasks/main.yml` the per-node flow. Copy it, swap `apt` for `dnf`, and
+sibling it as `roles/kubernetes-upgrade-rhel/` to add RHEL-family
+support.
 
 ## Customizing
 
-- **Skip the preflight** for a single run: pass `skip_preflight=true`
-  via the UI. For a permanent change, edit the `pre_tasks` in
-  [`playbook.yml`](./playbook.yml).
-- **Change drain behaviour**: edit the role's
-  `defaults/main.yml`, or expose more knobs as manifest parameters.
-- **Override the whole action**: copy `actions/k8s-upgrade/` into a
-  higher-precedence pack and edit there.
+- **Skip the per-node checks** for a single run: `skip_preflight=true`.
+- **Change drain behaviour**: `drain_timeout` and `drain_force`, or the
+  role's `tasks/drain.yml`.
+- **Override the whole action**: copy `actions/k8s-upgrade/` into
+  another pack and pin that pack as the winner for `k8s-upgrade`.

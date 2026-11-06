@@ -1,8 +1,25 @@
 ---
-# Wire from manifest parameters via --extra-vars.
+# Wire from manifest parameters via --extra-vars. Extra-vars win over
+# these, so every manifest parameter needs a default here.
 target_version: ""
+report_only: false
 skip_preflight: false
 drain_timeout: 300
+drain_force: false
+etcd_backup_dir: /var/lib/labdog/etcd-backups
+allow_partial_group: false
+
+# The node every kubectl call runs on: the alphabetically first
+# control-plane node, picked by the discovery play. Its admin.conf is
+# the only kubeconfig the action needs.
+k8s_driver: "{{ groups['k8s_driver'] | first }}"
+k8s_kubeconfig: /etc/kubernetes/admin.conf
+
+# Set on a node before the action cordons it, removed when the action
+# uncordons it. A node the operator cordoned by hand never gets it, so
+# the action never uncordons a node it did not cordon. A re-run finishes
+# any node that is on target but still carries it.
+k8s_cordon_annotation: labdog.io/k8s-upgrade-cordoned
 
 # Apt package state. Kubernetes ships per-minor-version repositories at
 # pkgs.k8s.io; the operator is expected to have the matching repo
@@ -14,9 +31,5 @@ kube_packages:
   - kubelet
   - kubectl
 
-# We rely on apt's exact-version pinning ("=") and clear apt-mark holds
-# only for the duration of the upgrade. This avoids drift between
-# kubeadm/kubelet/kubectl during reconvergence — they MUST be
-# upgraded together to the same minor.
-kube_apt_version_suffix: "*"  # the deb is named like "1.30.4-1.1"; allow any
-                              # epoch / debian-rev qualifier
+# The deb is named like "1.30.4-1.1"; allow any Debian revision.
+kube_apt_version_suffix: "*"

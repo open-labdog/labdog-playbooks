@@ -6,71 +6,81 @@
 # ``kubeadm upgrade node``) are 4-line diffs.
 
 - name: Refuse non-Debian-family hosts (apt-only for now)
-  # The role uses apt + apt-mark + apt cache modules. RHEL/Rocky/Alma
-  # support is tracked in TODO.md; until it lands, fail loudly so the
-  # operator doesn't end up with a half-upgraded cluster.
+  # The role uses apt + dpkg selections. RHEL/Rocky/Alma support is not
+  # there yet; fail loudly so the operator doesn't end up with a
+  # half-upgraded cluster.
   ansible.builtin.fail:
     msg: >-
       k8s-upgrade currently supports apt-based hosts only
-      (Debian / Ubuntu). This host reports os_family={{ ansible_os_family }}.
+      (Debian / Ubuntu). This host reports os_family={{ ansible_facts['os_family'] }}.
       RHEL / Rocky / Alma support is on the roadmap.
-  when: ansible_os_family != "Debian"
+  when: ansible_facts['os_family'] != "Debian"
 
-# Idempotency check — supports the "operator re-runs the action after
-# a partial failure" workflow. If kubelet on this node is already on
-# the target version, treat the node as done and skip the rest of the
-# role (drain / kubeadm / packages / restart / uncordon). Re-running
-# the action against a group with a mix of upgraded and still-pending
-# nodes is now a no-op for the upgraded ones.
-- name: Probe current kubelet version
-  ansible.builtin.command: kubelet --version
-  changed_when: false
-  register: _kubelet_version_probe
-  failed_when: false   # absent kubelet binary ⇒ not-on-target, continue with upgrade
+- name: Read the node's current state
+  ansible.builtin.import_tasks: probe.yml
 
-- name: Mark node as already on target version
-  ansible.builtin.set_fact:
-    _k8s_already_on_target: >-
-      {{ _kubelet_version_probe.rc | default(1) == 0
-         and ('v' + target_version) in (_kubelet_version_probe.stdout | default('')) }}
-
-- name: Report already-on-target nodes
+- name: Report what happens to this node
   ansible.builtin.debug:
     msg: >-
-      Node {{ inventory_hostname }} already on kubelet v{{ target_version }};
-      skipping upgrade.
-  when: _k8s_already_on_target | bool
+      {{ inventory_hostname }}: kubelet {{ _k8s_current or 'not found' }},
+      target v{{ target_version }}:
+      {{ 'upgrade' if not _k8s_already_on_target
+         else 'already on target, finishing the uncordon' if _k8s_cordoned_by_us
+         else 'already on target, nothing to do' }}{{
+         ' (left cordoned afterwards: it was cordoned before this run)'
+         if _k8s_was_unschedulable and not _k8s_cordoned_by_us else '' }}.
+
+- name: Refresh the apt cache
+  # Outside preflight so skip_preflight can't send a drained node into
+  # an install from a stale cache.
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  changed_when: false
+  when: not _k8s_already_on_target
 
 - name: Pre-flight checks
   ansible.builtin.import_tasks: preflight.yml
   when:
-    - not _k8s_already_on_target | bool
+    - not _k8s_already_on_target
     - not skip_preflight | bool
 
-- name: Drain node — {{ inventory_hostname }}
-  ansible.builtin.import_tasks: drain.yml
-  when: not _k8s_already_on_target | bool
-
-- name: Install new kubeadm and run kubeadm upgrade
-  ansible.builtin.import_tasks: upgrade-control-plane.yml
+- name: Upgrade the node
   when:
-    - not _k8s_already_on_target | bool
-    - node_role == "control_plane"
+    - not _k8s_already_on_target
+    - not report_only | bool
+  block:
+    - name: Cordon and drain
+      ansible.builtin.import_tasks: drain.yml
 
-- name: Install new kubeadm and run kubeadm upgrade node
-  ansible.builtin.import_tasks: upgrade-worker.yml
-  when:
-    - not _k8s_already_on_target | bool
-    - node_role == "worker"
+    - name: Mark the node as changed from here on
+      # The rescue below uses this to decide whether the node can simply
+      # be uncordoned again, or has to stay out of service until a
+      # re-run finishes it.
+      ansible.builtin.set_fact:
+        _k8s_touched: true
 
-- name: Upgrade kubelet and kubectl to the same target version
-  ansible.builtin.import_tasks: upgrade-packages.yml
-  when: not _k8s_already_on_target | bool
+    - name: Install new kubeadm and run kubeadm upgrade
+      ansible.builtin.import_tasks: upgrade-kubeadm.yml
 
-- name: Restart kubelet and wait for the node to settle
-  ansible.builtin.import_tasks: restart-kubelet.yml
-  when: not _k8s_already_on_target | bool
+    - name: Upgrade kubelet and kubectl to the same target version
+      ansible.builtin.import_tasks: upgrade-packages.yml
 
-- name: Uncordon node — {{ inventory_hostname }}
+    - name: Restart kubelet and wait for the node to settle
+      ansible.builtin.import_tasks: restart-kubelet.yml
+
+    - name: Uncordon
+      ansible.builtin.import_tasks: uncordon.yml
+
+  rescue:
+    - name: Clean up and explain the failure
+      ansible.builtin.import_tasks: rescue.yml
+
+- name: Finish a node an earlier run left cordoned
+  # Idempotent re-run: the node already runs the target kubelet, but
+  # the run that upgraded it failed before its uncordon.
   ansible.builtin.import_tasks: uncordon.yml
-  when: not _k8s_already_on_target | bool
+  when:
+    - _k8s_already_on_target
+    - _k8s_cordoned_by_us
+    - not report_only | bool

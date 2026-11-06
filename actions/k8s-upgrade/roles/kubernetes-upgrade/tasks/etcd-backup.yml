@@ -1,0 +1,79 @@
+---
+# etcd snapshot on the first control-plane node, before
+# ``kubeadm upgrade apply``. kubeadm keeps its own copy under
+# /etc/kubernetes/tmp, but that is gone the moment the node is restored
+# from a VM snapshot; this one goes to a directory the operator picks.
+#
+# Only for stacked etcd (a kubeadm static pod on this node). External
+# etcd belongs to whoever runs it, so the role says so and moves on.
+# etcdctl comes from the etcd image itself, through crictl, which
+# kubeadm requires on every node.
+
+- name: Look for the stacked etcd manifest
+  ansible.builtin.stat:
+    path: /etc/kubernetes/manifests/etcd.yaml
+  register: _k8s_etcd_static
+
+- name: Note that etcd is external
+  ansible.builtin.debug:
+    msg: >-
+      No /etc/kubernetes/manifests/etcd.yaml on {{ inventory_hostname }}:
+      etcd is external, so no snapshot is taken. Back it up yourself
+      before re-running if you have not.
+  when: not _k8s_etcd_static.stat.exists
+
+- name: Back up stacked etcd
+  when: _k8s_etcd_static.stat.exists
+  vars:
+    _name: "etcd-{{ ansible_facts['date_time'].iso8601_basic_short }}-{{ _k8s_current or 'unknown' }}.db"
+    # /var/lib/etcd is the etcd pod's hostPath data volume, so a file
+    # written there inside the container appears on the node.
+    _in_pod: "/var/lib/etcd/labdog-{{ _name }}"
+  block:
+    - name: Create the backup directory
+      ansible.builtin.file:
+        path: "{{ etcd_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Find the running etcd container
+      ansible.builtin.command:
+        argv: [crictl, ps, --name, "^etcd$", --state, running, --quiet]
+      register: _k8s_etcd_container
+      changed_when: false
+      failed_when: _k8s_etcd_container.stdout_lines | length == 0
+
+    - name: Save the etcd snapshot
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - exec
+          - "{{ _k8s_etcd_container.stdout_lines | first }}"
+          - etcdctl
+          - --endpoints=https://127.0.0.1:2379
+          - --cacert=/etc/kubernetes/pki/etcd/ca.crt
+          - --cert=/etc/kubernetes/pki/etcd/server.crt
+          - --key=/etc/kubernetes/pki/etcd/server.key
+          - snapshot
+          - save
+          - "{{ _in_pod }}"
+      changed_when: true
+
+    - name: Move the snapshot into the backup directory
+      ansible.builtin.command:
+        argv: [mv, "{{ _in_pod }}", "{{ etcd_backup_dir }}/{{ _name }}"]
+      changed_when: true
+
+    - name: Check the snapshot is not empty
+      ansible.builtin.stat:
+        path: "{{ etcd_backup_dir }}/{{ _name }}"
+      register: _k8s_etcd_snapshot
+      failed_when: not _k8s_etcd_snapshot.stat.exists or _k8s_etcd_snapshot.stat.size == 0
+
+    - name: Report the snapshot
+      ansible.builtin.debug:
+        msg: >-
+          etcd snapshot saved to {{ etcd_backup_dir }}/{{ _name }} on
+          {{ inventory_hostname }} ({{ _k8s_etcd_snapshot.stat.size }} bytes).
