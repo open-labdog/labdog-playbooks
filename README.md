@@ -53,7 +53,7 @@ that are genuinely shared across actions — LabDog adds it to
 | Action | Targets | Summary |
 |---|---|---|
 | [`alloy-install`](./actions/alloy-install/) | host, group | Install and configure Grafana Alloy on Debian/Ubuntu hosts; ships metrics + logs to Prometheus and Loki with optional service auto-detection. Registers `alloy` package and `alloy.service` via `post_run_register` so LabDog manages them going forward. |
-| [`k8s-upgrade`](./actions/k8s-upgrade/) | group only | Drain, `kubeadm`-upgrade, and re-admit each node serially across the `control_plane` and `workers` groups. Apt-only. |
+| [`k8s-upgrade`](./actions/k8s-upgrade/) | group only | Drain, `kubeadm`-upgrade, and re-admit each node serially, control plane first. Self-discovers node roles, snapshots etcd, and has a `report_only` preview. Apt-only. |
 | [`linux-upgrade`](./actions/linux-upgrade/) | host, group | `apt upgrade` all packages and reboot if `/var/run/reboot-required` is set. Uses `verify/post-upgrade.yml` as the success gate. |
 | [`linux-os-upgrade`](./actions/linux-os-upgrade/) | host, group | Major-release distribution upgrade (e.g. Debian 12→13, Ubuntu 22.04→24.04) via `apt dist-upgrade`. |
 | [`example`](./actions/example/) | host, group | Harmless probe that exercises the full snapshot → run → verify → rollback lifecycle. Decides success with a `verify_playbook`; `fail_verify` forces a rollback on demand. |

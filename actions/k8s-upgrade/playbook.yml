@@ -15,13 +15,8 @@
 # discovers control-plane vs worker nodes — no labdog-side roles or
 # membership attributes involved.
 #
-# Required extra-vars:
-#   target_version    — semver string, e.g. "1.30.4". Matches the
-#                       kubeadm/kubelet/kubectl package version that
-#                       must already be downloadable from the apt repo
-#                       configured on every node.
-#   skip_preflight    — bool; bypasses the role's assert block.
-#   drain_timeout     — int; seconds to wait for kubectl drain.
+# Parameters arrive as top-level extra-vars; the role's defaults/main.yml
+# holds every default. See manifest.yml for what each one does.
 
 - name: Discover cluster topology
   hosts: all
@@ -34,12 +29,15 @@
       # node. Workers don't have this file. Probe is read-only.
       ansible.builtin.stat:
         path: /etc/kubernetes/manifests/kube-apiserver.yaml
-      register: cp_manifest
+      register: k8s_cp_manifest
 
-    - name: Add to dynamic role group
-      ansible.builtin.add_host:
-        name: "{{ inventory_hostname }}"
-        groups: "k8s_{{ 'control_plane' if cp_manifest.stat.exists else 'worker' }}"
+    - name: Group the node by role
+      # group_by runs once per host. add_host would not: it bypasses the
+      # host loop and runs only for the first host, which classified a
+      # single node and left the rest of the cluster out of the run.
+      ansible.builtin.group_by:
+        key: "k8s_{{ 'control_plane' if k8s_cp_manifest.stat.exists else 'worker' }}"
+      changed_when: false
 
     - name: Refuse if no control plane found
       ansible.builtin.assert:
@@ -51,43 +49,37 @@
           cluster, including at least one control-plane node.
       run_once: true  # noqa: run-once
 
-- name: Validate cluster prerequisites
-  hosts: k8s_control_plane[0]
+    - name: Pick the driver node
+      # The alphabetically first control-plane node runs every kubectl
+      # call and `kubeadm upgrade apply`. Sorted, because group_by fills
+      # groups in task-completion order, which varies between runs. The
+      # upgrade plays use `order: sorted`, so the driver goes first.
+      ansible.builtin.group_by:
+        key: k8s_driver
+      changed_when: false
+      when: inventory_hostname == groups['k8s_control_plane'] | sort(case_sensitive=true) | first
+
+- name: Validate the cluster before touching any node
+  hosts: k8s_driver
   gather_facts: false
   become: true
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   tasks:
-    - name: Verify target_version is a semver
-      ansible.builtin.assert:
-        that:
-          - target_version is defined
-          - target_version is match("^[0-9]+\\.[0-9]+\\.[0-9]+$")
-        fail_msg: >-
-          target_version must be set to a semver like "1.30.4". Got:
-          {{ target_version | default('<unset>') }}
-
-    - name: Verify kubectl is on PATH on the driver node
-      ansible.builtin.command: kubectl version --client=true -o json
-      changed_when: false
-      register: kubectl_probe
-      failed_when: kubectl_probe.rc != 0
-
-    - name: Every Ansible inventory hostname matches a Kubernetes node
-      # LabDog treats inventory hostnames and Kubernetes node names as
-      # identical. If they differ (DNS short vs FQDN, or operator
-      # mistake during cluster bootstrap) every kubectl drain/uncordon
-      # would target a non-existent node, so fail fast.
-      ansible.builtin.command: >-
-        kubectl get node {{ item }} --no-headers -o name
-      loop: "{{ groups['k8s_control_plane'] + groups['k8s_worker'] | default([]) }}"
-      changed_when: false
-      register: node_probe
-      failed_when: node_probe.rc != 0
+    - name: Check membership, hostnames and version skew
+      ansible.builtin.import_role:
+        name: kubernetes-upgrade
+        tasks_from: validate.yml
 
 - name: Upgrade control-plane nodes serially
   hosts: k8s_control_plane
+  # The driver (sorted first) must run `kubeadm upgrade apply` before
+  # any other control-plane node runs `kubeadm upgrade node`.
+  order: sorted
   serial: 1
+  # Stop the whole run at the first failed node. Without it a failed
+  # control-plane node would still let the worker play start.
+  any_errors_fatal: true
   become: true
   gather_facts: true
   vars:
@@ -95,9 +87,23 @@
   roles:
     - role: kubernetes-upgrade
 
+- name: Confirm the control plane is on target before any worker
+  hosts: k8s_driver
+  gather_facts: false
+  become: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Check every control-plane kubelet
+      ansible.builtin.import_role:
+        name: kubernetes-upgrade
+        tasks_from: control-plane-done.yml
+
 - name: Upgrade worker nodes serially
   hosts: k8s_worker
+  order: sorted
   serial: 1
+  any_errors_fatal: true
   become: true
   gather_facts: true
   vars:

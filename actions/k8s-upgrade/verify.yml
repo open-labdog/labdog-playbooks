@@ -1,0 +1,65 @@
+---
+# Verify playbook for k8s-upgrade.
+#
+# LabDog runs this once per member, against a single-host inventory,
+# after the main playbook, with the same extra-vars. A failure here
+# rolls that member back to its pre-run VM snapshot, so it must only
+# fail for a node this run actually upgraded:
+#
+#   * report_only → nothing changed; pass.
+#   * kubelet not on target → this run never reached the node (an
+#     earlier node failed and stopped the run); pass. Rolling back an
+#     untouched control-plane node would restore an older etcd member.
+#   * kubelet on target → it must be active and the node Ready.
+#
+# Workers have no admin.conf, so the Ready check reads the node's own
+# object with the kubelet's kubeconfig, which the node authorizer allows.
+
+- name: Verify the node finished the Kubernetes upgrade
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    target_version: ""
+    report_only: false
+  tasks:
+    - name: Nothing to verify in report-only mode
+      ansible.builtin.meta: end_play
+      when: report_only | bool
+
+    - name: Probe the kubelet version
+      ansible.builtin.command:
+        argv: [kubelet, --version]
+      register: verify_kubelet
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Skip a node this run did not upgrade
+      ansible.builtin.meta: end_host
+      when: >-
+        verify_kubelet.rc != 0
+        or (verify_kubelet.stdout | split | last) != 'v' + target_version
+
+    - name: Kubelet is active
+      ansible.builtin.systemd_service:
+        name: kubelet
+      register: verify_kubelet_unit
+      failed_when: verify_kubelet_unit.status.ActiveState | default('inactive') != 'active'
+
+    - name: Node reports Ready
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig=/etc/kubernetes/kubelet.conf
+          - get
+          - node
+          - "{{ inventory_hostname }}"
+          - -o
+          - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+      register: verify_ready
+      changed_when: false
+      check_mode: false
+      until: verify_ready.stdout | trim == "True"
+      retries: 12
+      delay: 5
