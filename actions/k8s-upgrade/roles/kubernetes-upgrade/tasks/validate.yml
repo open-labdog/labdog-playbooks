@@ -52,7 +52,8 @@
     _k8s_tgt: "{{ _tgt }}"
     _k8s_srv: "{{ _srv }}"
     _k8s_unknown: "{{ _k8s_inventory_nodes | difference(_k8s_api_nodes) }}"
-    _k8s_missing: "{{ _k8s_api_nodes | difference(_k8s_inventory_nodes) }}"
+    # A surge node an earlier run left joined is in the run, not missing.
+    _k8s_missing: "{{ _k8s_api_nodes | difference(_k8s_inventory_nodes + groups['k8s_surge'] | default([])) }}"
     _k8s_kubelets_too_new: >-
       {{ _nodes | selectattr('status.nodeInfo.kubeletVersion', 'version', 'v' + target_version, '>')
          | map(attribute='metadata.name') | list }}
@@ -109,12 +110,33 @@
       minors behind v{{ target_version }}, which the upgraded API server
       would not support: {{ _k8s_kubelets_too_old | join(', ') or 'none' }}.
 
+- name: List the nodes this run will drain
+  # The same test the per-node probe makes: a node whose kubelet is
+  # already exactly on target is skipped, so it is never drained.
+  vars:
+    _nodes: "{{ (_k8s_nodes_probe.stdout | from_json)['items'] }}"
+  ansible.builtin.set_fact:
+    _k8s_to_drain: >-
+      {{ _nodes | rejectattr('status.nodeInfo.kubeletVersion', 'equalto', 'v' + target_version)
+         | map(attribute='metadata.name') | select('in', _k8s_inventory_nodes) | sort | list }}
+
+- name: Check the surge node
+  ansible.builtin.import_tasks: surge-validate.yml
+
+- name: Check that every drain fits on the rest of the cluster
+  ansible.builtin.import_tasks: capacity.yml
+
 - name: Look for stacked etcd
   ansible.builtin.stat:
     path: /etc/kubernetes/manifests/etcd.yaml
   register: _k8s_etcd_manifest
 
 - name: Report the plan
+  vars:
+    surge_plan:
+      join: "Surge node {{ surge_node }} joins after the control plane and leaves after the last worker."
+      reuse: "Surge node {{ surge_node }} is already in the cluster from an earlier run; it is reused and removed after the last worker."
+      none: "Surge node {{ surge_node }} is not needed: no worker is drained."
   ansible.builtin.debug:
     msg: >-
       Cluster on v{{ _k8s_server_version }}, target v{{ target_version }}.
@@ -122,6 +144,7 @@
       {{ groups['k8s_control_plane'] | join(', ') }};
       {{ groups['k8s_worker'] | default([]) | length }} worker(s).
       {% if _k8s_missing %}Left out: {{ _k8s_missing | join(', ') }}.{% endif %}
+      {{ surge_plan[_k8s_surge_state] if surge_node else '' }}
       {{ 'Preview (report only or --check): nothing will be changed.' if k8s_preview | bool else '' }}
 
 - name: Warn about VM rollback of stacked-etcd control-plane nodes

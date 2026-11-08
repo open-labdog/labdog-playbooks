@@ -7,6 +7,7 @@
 # fail for a node this run actually upgraded:
 #
 #   * report_only or --check → nothing changed; pass.
+#   * the surge node → reset at the end of the run, kubelet stopped; pass.
 #   * kubelet not on target → this run never reached the node (an
 #     earlier node failed and stopped the run); pass. Rolling back an
 #     untouched control-plane node would restore an older etcd member.
@@ -22,10 +23,17 @@
   vars:
     target_version: ""
     report_only: false
+    surge_node: ""
   tasks:
     - name: Nothing to verify in report-only mode
       ansible.builtin.meta: end_play
       when: report_only | bool or ansible_check_mode
+
+    - name: Skip the surge node
+      # The run resets it at the end, so its kubelet is stopped, and a
+      # VM rollback would only bring back an idle host.
+      ansible.builtin.meta: end_host
+      when: inventory_hostname == surge_node
 
     - name: Probe the kubelet version
       ansible.builtin.command:

@@ -1,0 +1,228 @@
+---
+# The surge node joins after the control plane is on target (a kubelet
+# must not be newer than its API server) and before any worker is
+# drained, so the worker drains have its room. k8s_surge_state, decided
+# by the validation on the driver, says what to do:
+#
+#   none  → no surge node, or no worker is drained; nothing to do.
+#   reuse → an earlier run left it joined; make sure it is schedulable.
+#   join  → install the kube packages at the target and kubeadm join.
+#
+# The host must already be ready to be a node: container runtime, swap,
+# kernel modules and the pkgs.k8s.io repo for the target minor, as for
+# any host before `kubeadm join`. The action does not set those up.
+
+- name: Nothing to do for the surge node
+  ansible.builtin.meta: end_host
+  when: k8s_surge_state == 'none'
+
+- name: Refuse a non-Debian-family surge node (apt-only for now)
+  ansible.builtin.fail:
+    msg: >-
+      k8s-upgrade supports apt-based hosts only (Debian / Ubuntu). Surge
+      node {{ inventory_hostname }} reports os_family={{ ansible_facts['os_family'] }}.
+  when: ansible_facts['os_family'] != "Debian"
+
+- name: Refuse a host that is set up as a node already
+  # A kubelet.conf without a cluster node by that name (the validation
+  # checked) is left over from some other cluster or an unfinished
+  # reset. kubeadm join would refuse it too, later and less clearly.
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: _k8s_surge_kubelet_conf
+  when: k8s_surge_state == 'join'
+
+- name: Stop if it is
+  ansible.builtin.fail:
+    msg: >-
+      Surge node {{ inventory_hostname }} already has
+      /etc/kubernetes/kubelet.conf but is not a node of this cluster. Run
+      kubeadm reset on it first if it is free to use.
+  when:
+    - k8s_surge_state == 'join'
+    - _k8s_surge_kubelet_conf.stat.exists
+
+- name: Refresh the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  changed_when: false
+  when: k8s_surge_state == 'join'
+
+- name: Pre-flight checks
+  # The kube packages must be downloadable at the target. The kubelet
+  # check is skipped for the surge node, which has no kubelet running yet.
+  ansible.builtin.import_tasks: preflight.yml
+  when:
+    - k8s_surge_state == 'join'
+    - not skip_preflight | bool
+
+- name: Report what happens to the surge node
+  ansible.builtin.debug:
+    msg: >-
+      Surge node {{ inventory_hostname }}:
+      {{ 'join at v' + target_version if k8s_surge_state == 'join'
+         else 'in the cluster from an earlier run, reused' }}{{
+         ' (preview: nothing is changed)' if k8s_preview | bool else '' }}.
+
+- name: Join the surge node
+  when:
+    - k8s_surge_state == 'join'
+    - not k8s_preview | bool
+  block:
+    - name: Mark the surge node as changed from here on
+      ansible.builtin.set_fact:
+        _k8s_surge_touched: true
+
+    - name: Install the kube packages pinned to {{ target_version }}
+      # allow_change_held_packages moves packages an earlier run held. No
+      # dpkg_selections release first, as the upgrade role does: on a host
+      # that never had them, dpkg_selections fails on an unknown package.
+      ansible.builtin.apt:
+        name: "{{ kube_packages | map('regex_replace', '$', '=' + target_version + '-' + kube_apt_version_suffix) | list }}"
+        state: present
+        allow_change_held_packages: true
+        allow_downgrade: true
+        update_cache: false
+
+    - name: Hold the kube packages again
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ kube_packages }}"
+
+    - name: Enable kubelet
+      ansible.builtin.systemd_service:
+        name: kubelet
+        enabled: true
+
+    - name: Create a short-lived join token
+      # The output holds a bootstrap token, so it stays out of the log.
+      # It lives 15 minutes and is deleted again below either way.
+      ansible.builtin.command:
+        argv: [kubeadm, token, create, --ttl, 15m, --print-join-command]
+      delegate_to: "{{ k8s_driver }}"
+      register: _k8s_join_command
+      changed_when: true
+      no_log: true
+
+    - name: Run kubeadm join
+      # Registers the node under its inventory hostname, which the rest
+      # of the action relies on. no_log for the token in the command
+      # line; the next task prints the output with the token cut out.
+      ansible.builtin.command:
+        argv: "{{ _k8s_join_command.stdout.split() + ['--node-name', inventory_hostname] }}"
+      register: _k8s_join
+      changed_when: true
+      failed_when: false
+      no_log: true
+
+    - name: Show kubeadm join's output
+      ansible.builtin.debug:
+        msg: >-
+          kubeadm join exited {{ _k8s_join.rc }}.
+          {{ (_k8s_join.stderr | default('') + ' ' + _k8s_join.stdout | default(''))
+             | regex_replace('[a-z0-9]{6}[.][a-z0-9]{16}', '<token>') | trim | truncate(2000) }}
+      when: _k8s_join.rc != 0
+
+    - name: Stop if the join failed
+      ansible.builtin.assert:
+        that: _k8s_join.rc == 0
+        fail_msg: kubeadm join failed on {{ inventory_hostname }}; its output is above.
+        quiet: true
+
+    - name: Wait for the node to register
+      ansible.builtin.command:
+        argv: [kubectl, get, node, "{{ inventory_hostname }}"]
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      register: _k8s_surge_registered
+      changed_when: false
+      until: _k8s_surge_registered.rc == 0
+      retries: 30
+      delay: 5
+
+    - name: Mark it as this action's surge node
+      # From here on a re-run reuses and removes it, and the validation
+      # tells it apart from the cluster's own nodes.
+      ansible.builtin.command:
+        argv: [kubectl, annotate, node, "{{ inventory_hostname }}", "{{ k8s_surge_annotation }}=true", --overwrite]
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      changed_when: true
+
+  rescue:
+    - name: Reset the surge node
+      ansible.builtin.command:
+        argv: [kubeadm, reset, --force]
+      changed_when: true
+      failed_when: false
+      when: _k8s_surge_touched | default(false)
+
+    - name: Remove its node object, if it registered
+      ansible.builtin.command:
+        argv: [kubectl, delete, node, "{{ inventory_hostname }}", --ignore-not-found]
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      changed_when: true
+      failed_when: false
+      when: _k8s_surge_touched | default(false)
+
+    - name: Stop the run
+      ansible.builtin.fail:
+        msg: >-
+          Joining surge node {{ inventory_hostname }} failed at
+          "{{ ansible_failed_task.name | default('unknown task') }}".
+          {{ 'It was reset and taken out of the cluster again.' if _k8s_surge_touched | default(false)
+             else 'Nothing on it had changed yet.' }}
+          The control plane is already on v{{ target_version }}; no worker
+          was touched. Fix the cause and re-run with the same target_version.
+
+  always:
+    - name: Delete the join token
+      # By its ID, the part of the token before the dot.
+      vars:
+        _token_id: >-
+          {{ (_k8s_join_command | default({})).stdout | default('')
+             | regex_findall('--token +([a-z0-9]{6})[.]') | first | default('') }}
+      ansible.builtin.command:
+        argv: [kubeadm, token, delete, "{{ _token_id }}"]
+      delegate_to: "{{ k8s_driver }}"
+      changed_when: true
+      failed_when: false
+      no_log: true
+      when: _token_id | length > 0
+
+- name: Make sure a reused surge node takes pods
+  # An earlier run may have stopped while removing it, after its cordon.
+  ansible.builtin.command:
+    argv: [kubectl, uncordon, "{{ inventory_hostname }}"]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  changed_when: true
+  when:
+    - k8s_surge_state == 'reuse'
+    - not k8s_preview | bool
+
+- name: Wait for the surge node to report Ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - node
+      - "{{ inventory_hostname }}"
+      - -o
+      - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_surge_ready
+  changed_when: false
+  until: _k8s_surge_ready.stdout | trim == "True"
+  retries: 60
+  delay: 5
+  when: not k8s_preview | bool

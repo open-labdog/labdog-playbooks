@@ -35,9 +35,20 @@
       # group_by runs once per host. add_host would not: it bypasses the
       # host loop and runs only for the first host, which classified a
       # single node and left the rest of the cluster out of the run.
+      # The surge node gets a group of its own whatever it holds; the
+      # validation refuses one that is a control-plane node.
       ansible.builtin.group_by:
-        key: "k8s_{{ 'control_plane' if k8s_cp_manifest.stat.exists else 'worker' }}"
+        key: >-
+          k8s_{{ 'surge' if inventory_hostname == surge_node | default('')
+                 else 'control_plane' if k8s_cp_manifest.stat.exists else 'worker' }}
       changed_when: false
+
+    - name: Read the surge node's hardware
+      # For the drain capacity check, which counts the surge node before
+      # it has joined. Read-only, so it runs in previews too.
+      ansible.builtin.setup:
+        gather_subset: [min, hardware]
+      when: inventory_hostname == surge_node | default('')
 
     - name: Refuse if no control plane found
       ansible.builtin.assert:
@@ -99,6 +110,23 @@
         name: kubernetes-upgrade
         tasks_from: control-plane-done.yml
 
+- name: Join the surge node at the target version
+  # After the control plane, never before: a kubelet must not be newer
+  # than the API server, and the surge node joins at the target. Only
+  # worker drains get its room; control-plane nodes are drained before
+  # it exists. Skipped when no surge_node is set, or no worker needs it.
+  hosts: k8s_surge
+  any_errors_fatal: true
+  become: true
+  gather_facts: true
+  vars:
+    node_role: surge
+  tasks:
+    - name: Join or reuse the surge node
+      ansible.builtin.import_role:
+        name: kubernetes-upgrade
+        tasks_from: surge-join.yml
+
 - name: Upgrade worker nodes serially
   hosts: k8s_worker
   order: sorted
@@ -110,3 +138,17 @@
     node_role: worker
   roles:
     - role: kubernetes-upgrade
+
+- name: Drain and remove the surge node
+  # Only once every worker is done. A failed run stops before this, so
+  # the surge node stays in the cluster carrying the pods it took; a
+  # re-run reuses it and removes it here.
+  hosts: k8s_surge
+  any_errors_fatal: true
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Remove the surge node from the cluster
+      ansible.builtin.import_role:
+        name: kubernetes-upgrade
+        tasks_from: surge-remove.yml

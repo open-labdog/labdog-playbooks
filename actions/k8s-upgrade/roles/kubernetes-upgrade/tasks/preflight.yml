@@ -8,6 +8,8 @@
     name: kubelet
   register: _k8s_kubelet_unit
   failed_when: _k8s_kubelet_unit.status.ActiveState | default('inactive') != 'active'
+  # The surge node has no kubelet running before it joins.
+  when: node_role | default('') != 'surge'
 
 - name: List the downloadable kube package versions
   ansible.builtin.command:

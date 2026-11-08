@@ -1,0 +1,72 @@
+---
+# The surge_node parameter, checked on the driver before any node is
+# touched. Read-only. Sets _k8s_surge_state, which the surge plays read
+# through the k8s_surge_state default: "none", "join" or "reuse". Never
+# "": in ansible-core 2.21 a template that renders empty becomes null.
+
+- name: No surge node
+  ansible.builtin.set_fact:
+    _k8s_surge_state: none
+  when: not surge_node
+
+- name: Check and classify the surge node
+  when: surge_node | length > 0
+  vars:
+    _surge_obj: >-
+      {{ (_k8s_nodes_probe.stdout | from_json)['items']
+         | selectattr('metadata.name', 'equalto', surge_node) | first | default({}) }}
+    _surge_annotations: "{{ (_surge_obj.metadata | default({})).annotations | default({}) }}"
+    _workers_to_drain: "{{ _k8s_to_drain | select('in', groups['k8s_worker'] | default([])) | list }}"
+  block:
+    - name: The surge node is in this run
+      # LabDog drops a host whose snapshot failed, and the surge node
+      # has to be a member of the targeted group to be in the run at all.
+      ansible.builtin.assert:
+        that: surge_node in groups['all']
+        fail_msg: >-
+          Surge node "{{ surge_node }}" is not in this run. Add the host to
+          the LabDog group you are upgrading (or check whether its snapshot
+          failed). Hosts in the run: {{ groups['all'] | join(', ') }}.
+        quiet: true
+
+    - name: The surge node is not a control-plane node
+      ansible.builtin.assert:
+        that: not hostvars[surge_node]['k8s_cp_manifest'].stat.exists
+        fail_msg: >-
+          Surge node "{{ surge_node }}" runs a Kubernetes control plane
+          (it has /etc/kubernetes/manifests/kube-apiserver.yaml). The action
+          resets its surge node at the end, so it refuses this one.
+        quiet: true
+
+    - name: The surge node is not one of the cluster's own nodes
+      # The action resets its surge node at the end. It only ever does that
+      # to a node that it joined itself, which it marks right after joining.
+      ansible.builtin.assert:
+        that: not _surge_obj or _surge_annotations[k8s_surge_annotation] | default('') == 'true'
+        fail_msg: >-
+          Surge node "{{ surge_node }}" is already a node of this cluster, and
+          not one an earlier run of this action joined (it lacks the
+          {{ k8s_surge_annotation }} annotation). The action resets its surge
+          node at the end, so it refuses to use one of the cluster's own nodes.
+          Pick a host that has not joined the cluster.
+        quiet: true
+
+    - name: A surge node left by an earlier run is on target
+      ansible.builtin.assert:
+        that: not _surge_obj or _surge_obj.status.nodeInfo.kubeletVersion == 'v' + target_version
+        fail_msg: >-
+          Surge node "{{ surge_node }}" is still in the cluster from an earlier
+          run, on kubelet {{ (_surge_obj.status | default({})).nodeInfo.kubeletVersion | default('unknown') }},
+          not v{{ target_version }}. Finish that upgrade first (re-run it with
+          its own target_version, which removes the surge node at the end), or
+          remove the node by hand: kubectl drain, kubectl delete node, then
+          kubeadm reset on the host.
+        quiet: true
+
+    - name: Decide what to do with the surge node
+      # A surge node an earlier run left joined is always reused, so that
+      # this run removes it at the end. A new one joins only when some
+      # worker will be drained.
+      ansible.builtin.set_fact:
+        _k8s_surge_state: >-
+          {{ 'reuse' if _surge_obj else 'join' if _workers_to_drain | length > 0 else 'none' }}

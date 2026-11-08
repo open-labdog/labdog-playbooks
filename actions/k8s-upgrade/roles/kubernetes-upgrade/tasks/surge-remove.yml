@@ -1,0 +1,84 @@
+---
+# Every worker is done: drain the surge node, which sends its pods back
+# to the upgraded workers, then reset it and delete its node object, in
+# that order (a running kubelet would register the node again). The
+# kube packages stay installed and held, so the next run's join only
+# moves them to its own target. The validation only lets this run on a
+# node this action joined (it carries k8s_surge_annotation).
+
+- name: Nothing to do for the surge node
+  ansible.builtin.meta: end_host
+  when: k8s_surge_state == 'none'
+
+- name: Report what happens to the surge node
+  ansible.builtin.debug:
+    msg: >-
+      Surge node {{ inventory_hostname }}: drain, reset and remove from
+      the cluster{{ ' (preview: nothing is changed)' if k8s_preview | bool else '' }}.
+
+- name: Remove the surge node
+  when: not k8s_preview | bool
+  block:
+    - name: Cordon the surge node
+      ansible.builtin.command:
+        argv: [kubectl, cordon, "{{ inventory_hostname }}"]
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      changed_when: true
+
+    - name: Drain the surge node
+      ansible.builtin.command:
+        argv: >-
+          {{ ['kubectl', 'drain', inventory_hostname,
+              '--ignore-daemonsets', '--delete-emptydir-data',
+              '--timeout=' ~ (drain_timeout | int) ~ 's']
+             + (['--force'] if drain_force | bool else []) }}
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      changed_when: true
+
+  rescue:
+    - name: Put the surge node back in service
+      # Its remaining pods keep running there; a re-run reuses it and
+      # tries the removal again.
+      ansible.builtin.command:
+        argv: [kubectl, uncordon, "{{ inventory_hostname }}"]
+      delegate_to: "{{ k8s_driver }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Stop the run
+      ansible.builtin.fail:
+        msg: >-
+          Draining surge node {{ inventory_hostname }} failed:
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('no message')) }}
+          Every node is upgraded. The surge node is uncordoned and stays in
+          the cluster; re-run with the same target_version to remove it.
+
+- name: Reset the surge node
+  ansible.builtin.command:
+    argv: [kubeadm, reset, --force]
+  changed_when: true
+  when: not k8s_preview | bool
+
+- name: Delete the surge node's node object
+  ansible.builtin.command:
+    argv: [kubectl, delete, node, "{{ inventory_hostname }}", --ignore-not-found]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  changed_when: true
+  when: not k8s_preview | bool
+
+- name: Report the surge node removed
+  ansible.builtin.debug:
+    msg: >-
+      Surge node {{ inventory_hostname }} was drained, reset and removed
+      from the cluster. Its kube packages stay installed and held at
+      v{{ target_version }}. kubeadm reset leaves /etc/cni/net.d and the
+      kube-proxy firewall rules behind; the next join overwrites them.
+  when: not k8s_preview | bool
