@@ -40,6 +40,14 @@
   # ephemeral state — the canonical kubeadm playbook does the same.
   # ``--force`` only when the operator asked for it: it deletes pods no
   # controller will recreate.
+  #
+  # A drain that fails for any reason but its own timeout is retried: an
+  # eviction can fail on a transient API error, such as an eviction
+  # webhook whose pod this same drain just moved (Mimir's rollout
+  # operator, "failed calling webhook ... EOF"). kubectl drain gives up
+  # on those at once; only PodDisruptionBudget refusals are retried
+  # inside it. A re-run picks up where the last one stopped. A timeout
+  # is not retried, since every attempt would wait drain_timeout again.
   ansible.builtin.command:
     argv: >-
       {{ ['kubectl', 'drain', inventory_hostname,
@@ -49,4 +57,11 @@
   delegate_to: "{{ k8s_driver }}"
   environment:
     KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_drain
+  until: >-
+    _k8s_drain.rc == 0
+    or 'global timeout reached' in (_k8s_drain.stderr | default(''))
+  retries: "{{ k8s_drain_retries | int }}"
+  delay: "{{ k8s_drain_retry_delay | int }}"
+  failed_when: _k8s_drain.rc != 0
   changed_when: true
