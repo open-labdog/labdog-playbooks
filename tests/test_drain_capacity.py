@@ -185,5 +185,62 @@ class Check(unittest.TestCase):
         self.assertIn("skipped", r["lines"][0])
 
 
+class Surge(unittest.TestCase):
+    def setUp(self):
+        taint = {"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"}
+        self.nodes = [node("cp", taints=[taint]), node("w1"), node("w2")]
+        self.pods = [pod("big", "w1", cpu="3"), pod("busy", "w2", cpu="3")]
+
+    def test_estimated_surge_makes_room_for_workers(self):
+        self.assertFalse(run(self.nodes, self.pods, ["w1", "w2"])["fits"])
+        est = dc.surge_node_object("s", "4", "8Gi", "amd64")
+        r = dc.check({"items": self.nodes}, {"items": self.pods}, ["w1", "w2"],
+                     surge="s", surge_estimate=est)
+        self.assertTrue(r["fits"], r["lines"])
+        self.assertIn("surge node s", r["lines"][0])
+        self.assertIn("estimated from its hardware", r["lines"][-1])
+
+    def test_estimate_subtracts_eviction_threshold(self):
+        est = dc.surge_node_object("s", "2", "1Gi")
+        self.assertEqual(dc.parse_quantity(est["status"]["allocatable"]["memory"]),
+                         2**30 - 100 * 2**20)
+        self.assertNotIn("kubernetes.io/arch", est["metadata"]["labels"])
+
+    def test_not_there_for_control_plane_drains(self):
+        nodes = [node("cp"), node("w1", cpu="1")]
+        pods = [pod("coredns", "cp", cpu="2")]
+        est = dc.surge_node_object("s", "4", "8Gi")
+        r = dc.check({"items": nodes}, {"items": pods}, ["cp"], surge="s",
+                     surge_estimate=est, before_surge={"cp"})
+        self.assertFalse(r["fits"])
+        r = dc.check({"items": nodes}, {"items": pods}, ["cp"], surge="s", surge_estimate=est)
+        self.assertTrue(r["fits"])
+
+    def test_existing_cordoned_surge_counts_for_workers_only(self):
+        nodes = self.nodes + [node("s", unschedulable=True)]
+        r = dc.check({"items": nodes}, {"items": self.pods}, ["w1", "w2"], surge="s")
+        self.assertTrue(r["fits"])
+        cp_pods = [pod("coredns", "cp", cpu="4",
+                       tolerations=[{"operator": "Exists"}])]
+        r = dc.check({"items": nodes}, {"items": cp_pods + self.pods}, ["cp"], surge="s",
+                     before_surge={"cp"})
+        self.assertFalse(r["fits"])
+
+    def test_existing_surge_uses_real_object_not_estimate(self):
+        nodes = self.nodes + [node("s", cpu="1")]
+        est = dc.surge_node_object("s", "64", "256Gi")
+        r = dc.check({"items": nodes}, {"items": self.pods}, ["w1"], surge="s",
+                     surge_estimate=est)
+        self.assertFalse(r["fits"])
+        self.assertNotIn("estimated", " ".join(r["lines"]))
+
+    def test_surge_selector_labels(self):
+        est = dc.surge_node_object("s", "4", "8Gi", "arm64")
+        p = pod("big", "w1", cpu="3", nodeSelector={"kubernetes.io/arch": "amd64"})
+        r = dc.check({"items": self.nodes}, {"items": [p, self.pods[1]]}, ["w1"], surge="s",
+                     surge_estimate=est)
+        self.assertFalse(r["fits"])
+
+
 if __name__ == "__main__":
     unittest.main()

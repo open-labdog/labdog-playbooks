@@ -5,21 +5,24 @@
 # hanging until drain_timeout with the node already cordoned. Read-only,
 # so it also runs in preview mode. files/drain_capacity.py does the work
 # and lists what it does not model (pod anti-affinity, topology spread,
-# PodDisruptionBudgets, volume topology).
-
-- name: List the nodes this run will drain
-  # The same test the per-node probe makes: a node whose kubelet is
-  # already exactly on target is skipped, so it is never drained.
-  vars:
-    _nodes: "{{ (_k8s_nodes_probe.stdout | from_json)['items'] }}"
-  ansible.builtin.set_fact:
-    _k8s_to_drain: >-
-      {{ _nodes | rejectattr('status.nodeInfo.kubeletVersion', 'equalto', 'v' + target_version)
-         | map(attribute='metadata.name') | select('in', _k8s_inventory_nodes) | sort | list }}
+# PodDisruptionBudgets, volume topology). With a surge node the worker
+# drains count it too, estimated from its hardware if it has not joined.
 
 - name: Simulate each drain against the rest of the cluster
+  vars:
+    _surge_facts: "{{ hostvars[surge_node]['ansible_facts'] | default({}) if surge_node else {} }}"
+    _arch_labels: {x86_64: amd64, aarch64: arm64, armv7l: arm, ppc64le: ppc64le, s390x: s390x}
+    _surge_args: >-
+      {{ [] if _k8s_surge_state == 'none'
+         else ['--surge', surge_node]
+              + (['--surge-cpu', _surge_facts['processor_vcpus'] | string,
+                  '--surge-memory', (_surge_facts['memtotal_mb'] | string) ~ 'Mi',
+                  '--surge-arch', _arch_labels[_surge_facts['architecture']] | default('')]
+                 if _k8s_surge_state == 'join' else [])
+              + (_k8s_to_drain | select('in', groups['k8s_control_plane'])
+                 | map('regex_replace', '^', '--before-surge=') | list) }}
   ansible.builtin.script:
-    cmd: "drain_capacity.py {{ _k8s_to_drain | map('quote') | join(' ') }}"
+    cmd: "drain_capacity.py {{ (_surge_args + _k8s_to_drain) | map('quote') | join(' ') }}"
     executable: python3
   register: _k8s_capacity_probe
   changed_when: false
@@ -39,7 +42,7 @@
       {{ (_k8s_capacity_probe.stdout | from_json).short | join(', ') }}:
       the pods listed above would stay Pending, and kubectl drain would
       wait out drain_timeout with the node cordoned. Free up capacity,
-      add a node, or lower the pods' requests. If you know they fit
+      name a surge node (or a bigger one), or lower the pods' requests. If you know they fit
       anyway (pod anti-affinity or a request the check reads wrongly),
       turn on "Skip the drain capacity check".
     quiet: true

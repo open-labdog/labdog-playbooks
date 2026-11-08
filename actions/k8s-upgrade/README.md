@@ -33,8 +33,9 @@ the LabDog UI.
    - prints the plan, and a warning for HA clusters with stacked etcd
      (see [Rollback](#rollback)).
 3. **Upgrades control-plane nodes serially**, then checks that every
-   control-plane kubelet is on target, then **upgrades workers
-   serially**. Each node: refresh the apt cache, preflight (kubelet
+   control-plane kubelet is on target, joins the
+   [surge node](#surge-node) if one is set, then **upgrades workers
+   serially**, then removes the surge node. Each node: refresh the apt cache, preflight (kubelet
    running; `kubeadm`, `kubelet`, `kubectl` downloadable at the
    target), cordon and drain, install `kubeadm`, `kubeadm upgrade`,
    install `kubelet` and `kubectl`, restart kubelet, wait for Ready,
@@ -62,6 +63,7 @@ See [`manifest.yml`](./manifest.yml).
 | `etcd_backup_dir` | string | `/var/lib/labdog/etcd-backups` | Absolute path on the first control-plane node for the etcd snapshot. |
 | `allow_partial_group` | bool | `false` | Proceed when the cluster has nodes outside the targeted group. They stay on their current version. |
 | `skip_capacity_check` | bool | `false` | Run even when the drain capacity check finds a node whose pods would not fit elsewhere. The check still runs and reports. |
+| `surge_node` | string | `""` | A spare host in the group that joins as a temporary worker while the workers are drained. See [Surge node](#surge-node). |
 
 The manifest sets `playbook_timeout_seconds: 7200`, which covers about
 six nodes at the 20-minute worst case. For a bigger cluster, raise it in
@@ -96,6 +98,69 @@ PodDisruptionBudgets or volumes pinned to a zone or node, and a pod
 without requests always fits on paper (the report counts them). So a
 pass is not a guarantee. If the check refuses a cluster you know is
 fine, turn on `skip_capacity_check`.
+
+With a [surge node](#surge-node), the worker drains count it as a
+destination: as it is if it is already in the cluster, or estimated
+from its hardware (every CPU, memory minus the kubelet's default 100Mi
+eviction threshold, 110 pods, its hostname/os/arch labels and no
+taints) if it has not joined yet. Control-plane nodes are drained
+before it joins, so their drains don't count it.
+
+## Surge node
+
+A cluster with no spare room can't drain a node. `surge_node` names a
+spare host that joins as a temporary worker for the run, so the
+workers' pods have somewhere to go:
+
+1. After the last control-plane node is on target, and before any
+   worker is drained, the action installs `kubeadm`, `kubelet` and
+   `kubectl` at the target version on the surge host (and holds them),
+   creates a 15-minute join token on the first control-plane node, runs
+   `kubeadm join --node-name <inventory hostname>`, deletes the token,
+   annotates the node `labdog.io/k8s-upgrade-surge=true`, and waits for
+   it to be Ready. It joins after the control plane, never before,
+   because a kubelet must not be newer than its API server.
+2. The workers are upgraded as usual. Their pods can land on the surge
+   node.
+3. After the last worker, the action drains the surge node (its pods go
+   back to the upgraded workers), runs `kubeadm reset`, and deletes its
+   node object. The kube packages stay installed and held, so the next
+   run only moves them to its target.
+
+What the surge host needs:
+
+- to be in the targeted LabDog group, and reachable like any member;
+- to be ready to be a node, which the action does not set up: a
+  container runtime configured for Kubernetes, swap off, the usual
+  kernel modules and sysctls, and the pkgs.k8s.io repository for the
+  target minor (the preflight checks the packages are downloadable);
+- Debian or Ubuntu;
+- enough allocatable room for what the drains need to move. The
+  capacity check tells you before anything is touched.
+
+A VM template you clone once and keep powered on, or power on before a
+run, is the easy way to have one.
+
+The validation refuses a surge node that is a control-plane node, that
+is already a node of the cluster without the annotation (so a typo can
+never reset one of the cluster's own nodes), or that has a
+`/etc/kubernetes/kubelet.conf` without being in the cluster. When no
+worker needs draining, the surge node is not joined at all.
+
+**When something fails.** A failed join resets the surge host and
+removes its node object, and the run stops with the control plane
+already upgraded and no worker touched; re-run with the same
+`target_version`. When a worker fails, the run stops before the
+removal, so the surge node stays in the cluster carrying the pods it
+took. A failed drain of the surge node uncordons it again. Either way,
+a re-run with the same `target_version` reuses the surge node (it
+carries the annotation and the target kubelet) and removes it at the
+end. A surge node left behind on an older version is refused; finish
+that run first, or remove it by hand with `kubectl drain`,
+`kubeadm reset` and `kubectl delete node`.
+
+`verify.yml` skips the surge node: its kubelet is stopped once it is
+reset, and a VM rollback of it would only bring back an idle host.
 
 ## Failures and re-runs
 

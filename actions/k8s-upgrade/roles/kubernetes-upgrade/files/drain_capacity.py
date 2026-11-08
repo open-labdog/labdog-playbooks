@@ -24,11 +24,18 @@ anti-affinity, topology spread constraints, PodDisruptionBudgets, volume
 topology (a PV pinned to one zone or node), and pods without requests, which
 always fit on paper. It does not refuse because of those.
 
-Usage: drain_capacity.py NODE [NODE ...]
+With a surge node (the surge_node parameter), the worker drains also count
+it as a destination: as it is when it is already in the cluster, or as an
+estimate from its hardware when it has not joined yet. Control-plane nodes
+are drained before it joins, so theirs do not.
+
+Usage: drain_capacity.py [--surge NAME [--surge-cpu N --surge-memory Q
+       [--surge-arch A]] [--before-surge NODE ...]] NODE [NODE ...]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import subprocess
@@ -266,8 +273,42 @@ def describe(req: dict) -> str:
     return ", ".join(parts) or "no requests"
 
 
-def check(nodes_json: dict, pods_json: dict, drain: list) -> dict:
+def surge_node_object(name: str, cpu: str, memory: str, arch: str = "", pods: str = "110") -> dict:
+    """A stand-in for a surge node that has not joined yet.
+
+    Allocatable is estimated as a kubeadm node would report it: every CPU,
+    memory minus the kubelet's default 100Mi hard-eviction threshold, and the
+    default 110 pods. It carries the labels the kubelet sets on itself, so a
+    nodeSelector on hostname, os or arch is honoured, and no taints.
+    """
+    labels = {"kubernetes.io/hostname": name, "kubernetes.io/os": "linux"}
+    if arch:
+        labels["kubernetes.io/arch"] = arch
+    mem = parse_quantity(memory) - 100 * 2**20
+    return {
+        "metadata": {"name": name, "labels": labels},
+        "spec": {},
+        "status": {
+            "allocatable": {"cpu": cpu, "memory": str(max(int(mem), 0)), "pods": pods},
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+
+
+def check(nodes_json: dict, pods_json: dict, drain: list, surge: str = "",
+          surge_estimate: dict = None, before_surge=()) -> dict:
+    """Simulate each drain in ``drain``.
+
+    ``surge`` names the run's surge node. It is a destination for every drain
+    not in ``before_surge`` (the control-plane nodes, drained before the
+    surge node joins): as it is now when it is already in the cluster, even
+    if cordoned, since the run uncordons it, or as ``surge_estimate`` when it
+    has not joined yet.
+    """
     nodes = {n["metadata"]["name"]: n for n in nodes_json.get("items") or []}
+    estimated = bool(surge and surge not in nodes and surge_estimate)
+    if estimated:
+        nodes[surge] = surge_estimate
     pods = [p for p in pods_json.get("items") or [] if not _finished(p)]
     used: dict = {name: {} for name in nodes}
     for pod in pods:
@@ -286,8 +327,14 @@ def check(nodes_json: dict, pods_json: dict, drain: list) -> dict:
             if (p.get("spec") or {}).get("nodeName") == target and evicted_by_drain(p)
         ]
         free = {}
+        with_surge = bool(surge) and target not in before_surge
         for name, node in nodes.items():
-            if name == target or (node.get("spec") or {}).get("unschedulable") or not _ready(node):
+            if name == target or not _ready(node):
+                continue
+            if name == surge:
+                if not with_surge and (estimated or (node.get("spec") or {}).get("unschedulable")):
+                    continue
+            elif (node.get("spec") or {}).get("unschedulable"):
                 continue
             alloc = _allocatable(node)
             free[name] = {k: alloc.get(k, Fraction(0)) - used[name].get(k, Fraction(0))
@@ -328,6 +375,7 @@ def check(nodes_json: dict, pods_json: dict, drain: list) -> dict:
             "moving": len(moving),
             "unplaced": unplaced,
             "no_requests": no_requests,
+            "surge": with_surge,
         })
 
     lines = []
@@ -337,13 +385,22 @@ def check(nodes_json: dict, pods_json: dict, drain: list) -> dict:
         elif r["fits"]:
             extra = (f" ({r['no_requests']} of them set no requests and are not counted)"
                      if r["no_requests"] else "")
-            lines.append(f"{r['node']}: {r['moving']} pod(s) to move, they fit on the other nodes{extra}.")
+            where = (f"the other nodes and surge node {surge}" if r["surge"]
+                     else "the other nodes")
+            lines.append(f"{r['node']}: {r['moving']} pod(s) to move, they fit on {where}{extra}.")
         else:
             pods_txt = "; ".join(f"{u['pod']} ({u['requests']}): {u['reason']}" for u in r["unplaced"])
             lines.append(
                 f"{r['node']}: {len(r['unplaced'])} of {r['moving']} pod(s) would not fit "
                 f"while it is drained: {pods_txt}."
             )
+    if estimated:
+        alloc = surge_estimate["status"]["allocatable"]
+        lines.append(
+            f"Surge node {surge} is not in the cluster yet; counted as cpu {alloc['cpu']}, "
+            f"memory {_fmt('memory', parse_quantity(alloc['memory']))}, {alloc['pods']} pods, "
+            "estimated from its hardware."
+        )
     return {
         "fits": all(r["fits"] for r in results),
         "short": [r["node"] for r in results if not r["fits"]],
@@ -359,12 +416,23 @@ def _kubectl_json(*args: str) -> dict:
 
 
 def main(argv: list) -> int:
-    if not argv:
-        print("usage: drain_capacity.py NODE [NODE ...]", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description="Would each drain fit on the rest of the cluster?")
+    parser.add_argument("drain", nargs="+", help="nodes the run will drain")
+    parser.add_argument("--surge", default="", help="the run's surge node")
+    parser.add_argument("--surge-cpu", help="its CPU count, for when it has not joined yet")
+    parser.add_argument("--surge-memory", help="its memory (a quantity), likewise")
+    parser.add_argument("--surge-arch", default="", help="its kubernetes.io/arch label, likewise")
+    parser.add_argument("--before-surge", action="append", default=[],
+                        help="a drained node the surge node is not there for yet; repeatable")
+    args = parser.parse_args(argv)
+    estimate = None
+    if args.surge and args.surge_cpu and args.surge_memory:
+        estimate = surge_node_object(args.surge, args.surge_cpu, args.surge_memory, args.surge_arch)
     nodes_json = _kubectl_json("get", "nodes")
     pods_json = _kubectl_json("get", "pods", "--all-namespaces")
-    json.dump(check(nodes_json, pods_json, argv), sys.stdout)
+    result = check(nodes_json, pods_json, args.drain, surge=args.surge,
+                   surge_estimate=estimate, before_surge=set(args.before_surge))
+    json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0
 

@@ -9,6 +9,7 @@ drain_force: false
 etcd_backup_dir: /var/lib/labdog/etcd-backups
 allow_partial_group: false
 skip_capacity_check: false
+surge_node: ""
 
 # Preview mode: report_only, or a real `ansible-playbook --check` (what
 # LabDog's dry run passes since labdog#264). In both, the role runs every
@@ -30,6 +31,17 @@ k8s_kubeconfig: /etc/kubernetes/admin.conf
 # the action never uncordons a node it did not cordon. A re-run finishes
 # any node that is on target but still carries it.
 k8s_cordon_annotation: labdog.io/k8s-upgrade-cordoned
+
+# Set on the surge node as soon as it has joined, removed with the node.
+# The action only ever reuses or removes a node that carries it, so a
+# surge_node that names a real cluster member is refused, never reset.
+k8s_surge_annotation: labdog.io/k8s-upgrade-surge
+
+# What the validation decided for the surge node, read by the surge
+# plays from the driver's facts: "none" (no surge node, or no worker
+# needs it), "join" (not in the cluster yet) or "reuse" (an earlier run
+# left it joined).
+k8s_surge_state: "{{ hostvars[k8s_driver]['_k8s_surge_state'] | default('none') }}"
 
 # Apt package state. Kubernetes ships per-minor-version repositories at
 # pkgs.k8s.io; the operator is expected to have the matching repo
