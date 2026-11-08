@@ -1,0 +1,69 @@
+---
+# kubeadm moves CoreDNS to a new version on most minor upgrades and
+# migrates its Corefile on the way. Its migration tool knows a fixed set
+# of plugins; any other one fails the CoreDNSUnsupportedPlugins preflight
+# check of `kubeadm upgrade plan` and `apply`. That only happens after the
+# first control-plane node has been cordoned and given the new kubeadm,
+# and a preview never installs that kubeadm, so look for it here instead.
+#
+# Skipping the check is safe when the plugin works on the new CoreDNS:
+# kubeadm then migrates the rest of the Corefile and leaves that plugin's
+# block as it is. `template` (for example `template IN AAAA . { rcode
+# NOERROR }` on an IPv4-only cluster) is one such plugin.
+
+- name: Read the CoreDNS Corefile
+  ansible.builtin.command:
+    argv: [kubectl, -n, kube-system, get, configmap, coredns, -o, "jsonpath={.data.Corefile}"]
+  register: _k8s_corefile
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: List the Corefile plugins kubeadm cannot migrate
+  # Plugins are the first word of each line one brace deep, inside a
+  # server block. Deeper lines are plugin options.
+  vars:
+    _plugins: >-
+      {%- set st = namespace(depth=0, out=[]) -%}
+      {%- for raw in _k8s_corefile.stdout | default('') | regex_findall('[^\n]+') -%}
+        {%- set line = raw | regex_replace('#.*$', '') | trim -%}
+        {%- if line and st.depth == 1 -%}
+          {%- set st.out = st.out + [line.split()[0] | regex_replace('\{$', '')] -%}
+        {%- endif -%}
+        {%- set st.depth = st.depth + (line | regex_findall('\{') | length) - (line | regex_findall('\}') | length) -%}
+      {%- endfor -%}
+      {{ st.out | reject('equalto', '}') | reject('equalto', '') | unique | list }}
+  ansible.builtin.set_fact:
+    _k8s_coredns_unsupported: "{{ _plugins | difference(k8s_coredns_migratable_plugins) }}"
+    _k8s_coredns_ignored: >-
+      {{ (kubeadm_ignore_preflight_errors | lower | regex_replace('\s', '')).split(',')
+         | select('in', ['corednsunsupportedplugins', 'all']) | list | length > 0 }}
+
+- name: Report the CoreDNS plugins kubeadm cannot migrate
+  ansible.builtin.debug:
+    msg: >-
+      CoreDNS: the Corefile uses {{ _k8s_coredns_unsupported | join(', ') }},
+      which kubeadm's CoreDNS migration does not know.
+      {{ 'kubeadm_ignore_preflight_errors skips that check; kubeadm leaves those blocks as they are.'
+         if _k8s_coredns_ignored else
+         'kubeadm upgrade would stop at its CoreDNSUnsupportedPlugins check.' }}
+  when: _k8s_coredns_unsupported | length > 0
+
+- name: Refuse a minor upgrade kubeadm would stop at CoreDNS
+  # Patch upgrades rarely change the CoreDNS version, and kubeadm only
+  # runs the check when it does, so only a minor upgrade is refused.
+  ansible.builtin.assert:
+    that: >-
+      _k8s_coredns_unsupported | length == 0
+      or _k8s_coredns_ignored
+      or (target_version.split('.')[1] | int) <= (_k8s_server_version.split('.')[1] | int)
+    fail_msg: >-
+      The CoreDNS Corefile (configmap kube-system/coredns) uses
+      {{ _k8s_coredns_unsupported | join(', ') }}, which kubeadm's CoreDNS
+      migration does not know, so kubeadm upgrade would fail its
+      CoreDNSUnsupportedPlugins preflight check after the first
+      control-plane node is cordoned. Check that the plugin works on the
+      CoreDNS version v{{ target_version }} ships, then set
+      "Ignore kubeadm preflight errors" to CoreDNSUnsupportedPlugins and
+      re-run. kubeadm then migrates the rest and leaves those blocks as
+      they are.

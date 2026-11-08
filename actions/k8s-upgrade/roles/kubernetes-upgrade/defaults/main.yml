@@ -10,6 +10,37 @@ etcd_backup_dir: /var/lib/labdog/etcd-backups
 allow_partial_group: false
 skip_capacity_check: false
 surge_node: ""
+kubeadm_ignore_preflight_errors: ""
+
+# kubeadm preflight checks to skip, as kubeadm's own flag. Passed to
+# upgrade plan, upgrade apply and upgrade node alike.
+k8s_kubeadm_extra_args: >-
+  {{ ['--ignore-preflight-errors=' ~ (kubeadm_ignore_preflight_errors | regex_replace('\s', ''))]
+     if kubeadm_ignore_preflight_errors | trim else [] }}
+
+# Plugins kubeadm's CoreDNS migration knows how to carry across a CoreDNS
+# version change (the coredns/corefile-migration tool it embeds). Any
+# other plugin in the Corefile makes `kubeadm upgrade plan` and `apply`
+# fail their CoreDNSUnsupportedPlugins preflight check, so validate.yml
+# looks for one up front.
+k8s_coredns_migratable_plugins:
+  - errors
+  - log
+  - health
+  - ready
+  - autopath
+  - kubernetes
+  - k8s_external
+  - prometheus
+  - forward
+  - proxy
+  - cache
+  - loop
+  - reload
+  - loadbalance
+  - hosts
+  - rewrite
+  - transfer
 
 # Preview mode: report_only, or a real `ansible-playbook --check` (what
 # LabDog's dry run passes since labdog#264). In both, the role runs every
