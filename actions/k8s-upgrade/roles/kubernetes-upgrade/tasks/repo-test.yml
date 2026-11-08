@@ -1,0 +1,80 @@
+---
+# Preflight for a minor upgrade: read the target repository through a
+# scratch apt setup (its own source list, lists directory and key), so
+# the node's real apt configuration and cache stay untouched. Runs in
+# preview mode too, which is how report_only can tell whether the target
+# version exists before the node's sources have moved.
+
+- name: Read from a scratch apt setup the repository for v{{ _k8s_target_minor }}
+  vars:
+    _k8s_scratch_apt:
+      - -o
+      - "Dir::Etc::SourceList={{ _k8s_repo_tmp.path }}/sources.list"
+      - -o
+      - "Dir::Etc::SourceParts={{ _k8s_repo_tmp.path }}/parts"
+      - -o
+      - "Dir::State::Lists={{ _k8s_repo_tmp.path }}/lists"
+      - -o
+      - "Dir::Cache::pkgcache="
+      - -o
+      - "Dir::Cache::srcpkgcache="
+      # The scratch directory is root-only, so the _apt sandbox user
+      # could not write into it.
+      - -o
+      - "APT::Sandbox::User=root"
+  block:
+    - name: Make a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .k8s-repo
+      register: _k8s_repo_tmp
+      changed_when: false
+      check_mode: false
+
+    - name: Fetch the signing key
+      ansible.builtin.import_tasks: repo-key.yml
+
+    - name: Create the scratch apt directories
+      ansible.builtin.file:
+        path: "{{ _k8s_repo_tmp.path }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [lists/partial, parts]
+      changed_when: false
+      check_mode: false
+
+    - name: Write a source list holding only the target repository
+      ansible.builtin.copy:
+        dest: "{{ _k8s_repo_tmp.path }}/sources.list"
+        content: "deb [signed-by={{ _k8s_repo_tmp.path }}/keyring.gpg] {{ _k8s_repo_url }} /\n"
+        mode: "0644"
+      changed_when: false
+      check_mode: false
+
+    - name: Download the target repository's index
+      ansible.builtin.command:
+        argv: "{{ ['apt-get'] + _k8s_scratch_apt + ['update'] }}"
+      changed_when: false
+      check_mode: false
+
+    - name: List the kube package versions in the target repository
+      ansible.builtin.command:
+        argv: "{{ ['apt-cache'] + _k8s_scratch_apt + ['madison'] + kube_packages }}"
+      register: _k8s_repo_madison
+      changed_when: false
+      check_mode: false
+
+    - name: Confirm the target repository has every kube package at the target version
+      ansible.builtin.import_tasks: packages-available.yml
+      vars:
+        _k8s_madison_lines: "{{ _k8s_repo_madison.stdout_lines }}"
+        _k8s_madison_where: "the v{{ _k8s_target_minor }} repository ({{ _k8s_repo_url }})"
+
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ _k8s_repo_tmp.path }}"
+        state: absent
+      changed_when: false
+      check_mode: false
+      when: _k8s_repo_tmp.path is defined

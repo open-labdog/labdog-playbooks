@@ -43,11 +43,11 @@ k8s_surge_annotation: labdog.io/k8s-upgrade-surge
 # left it joined).
 k8s_surge_state: "{{ hostvars[k8s_driver]['_k8s_surge_state'] | default('none') }}"
 
-# Apt package state. Kubernetes ships per-minor-version repositories at
-# pkgs.k8s.io; the operator is expected to have the matching repo
-# configured (e.g. ``deb https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /``)
-# before triggering this action. We never reconfigure repos here —
-# that's a bootstrap concern, not an upgrade one.
+# Kubernetes ships one apt repository per minor version at pkgs.k8s.io.
+# For a minor upgrade the role moves each node's existing source to the
+# target minor and refreshes its signing key, right before that node is
+# upgraded (tasks/repo-switch.yml). It never adds a repository a node
+# does not have.
 kube_packages:
   - kubeadm
   - kubelet
@@ -55,3 +55,8 @@ kube_packages:
 
 # The deb is named like "1.30.4-1.1"; allow any Debian revision.
 kube_apt_version_suffix: "*"
+
+# The pkgs.k8s.io path inside an apt source line, with the minor as
+# group 1. Matched anywhere in the line, so a mirror URL that keeps the
+# path (http://cache:3142/pkgs.k8s.io/core:/stable:/v1.30/deb/) counts.
+k8s_repo_path_regex: 'pkgs\.k8s\.io/core:/stable:/v([0-9]+\.[0-9]+)/deb'

@@ -1,0 +1,51 @@
+---
+# Get apt ready to install the kube packages at target_version: find the
+# node's pkgs.k8s.io source, check the target repository (preflight),
+# move the source to the target minor, refresh the cache, and confirm
+# every package is downloadable. Shared by the upgrade (main.yml) and the
+# surge node join (surge-join.yml). All before any drain, so a download
+# or key problem stops the run while the node is still in service.
+
+- name: Read the node's kube apt source
+  ansible.builtin.import_tasks: repo-find.yml
+
+- name: Check the target repository before moving to it
+  ansible.builtin.import_tasks: repo-test.yml
+  when:
+    - _k8s_repo_switch | bool
+    - not skip_preflight | bool
+
+- name: Move the kube apt source to the target minor
+  ansible.builtin.import_tasks: repo-switch.yml
+  when:
+    - _k8s_repo_switch | bool
+    - not k8s_preview | bool
+
+- name: Refresh the apt cache
+  # Not part of preflight, so skip_preflight can't send a drained node
+  # into an install from a stale cache.
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  changed_when: false
+
+- name: List the downloadable kube package versions
+  ansible.builtin.command:
+    argv: "{{ ['apt-cache', 'madison'] + kube_packages }}"
+  register: _k8s_madison
+  changed_when: false
+  check_mode: false
+  when:
+    - not skip_preflight | bool
+    # In preview the source has not moved, so the node's own cache
+    # cannot have a new minor; repo-test.yml already checked it.
+    - not (k8s_preview | bool and _k8s_repo_switch | bool)
+
+- name: Confirm every kube package is downloadable
+  ansible.builtin.import_tasks: packages-available.yml
+  vars:
+    _k8s_madison_lines: "{{ _k8s_madison.stdout_lines }}"
+    _k8s_madison_where: "the node's apt sources"
+  when:
+    - not skip_preflight | bool
+    - not (k8s_preview | bool and _k8s_repo_switch | bool)

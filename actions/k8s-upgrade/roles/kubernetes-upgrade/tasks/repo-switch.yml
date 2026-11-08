@@ -1,0 +1,59 @@
+---
+# Move the node's kube apt source to the target minor and install the
+# target repository's signing key where the source expects it. Runs
+# right before this node's upgrade, outside the drain block: the kube
+# packages stay held, so a node whose source moved but whose upgrade
+# then failed keeps running its old version, and a re-run carries on.
+# Only files found by repo-find.yml are touched.
+
+- name: Move the kube apt source to v{{ _k8s_target_minor }}
+  block:
+    - name: Make a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .k8s-repo
+      register: _k8s_repo_tmp
+
+    - name: Fetch the signing key
+      ansible.builtin.import_tasks: repo-key.yml
+
+    - name: Install the binary keyring the sources name
+      ansible.builtin.copy:
+        src: "{{ _k8s_repo_tmp.path }}/keyring.gpg"
+        dest: "{{ item }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ _k8s_repo_keyrings | reject('search', '\\.asc$') | list }}"
+
+    - name: Install the armored key the sources name
+      ansible.builtin.copy:
+        src: "{{ _k8s_repo_tmp.path }}/Release.key"
+        dest: "{{ item }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ _k8s_repo_keyrings | select('search', '\\.asc$') | list }}"
+
+    - name: Note a source without signed-by
+      ansible.builtin.debug:
+        msg: >-
+          The pkgs.k8s.io source on {{ inventory_hostname }} names no
+          signed-by keyring, so its key is left as it is.
+      when: _k8s_repo_keyrings | length == 0
+
+    - name: Point the source at v{{ _k8s_target_minor }}
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '(pkgs\.k8s\.io/core:/stable:/)v[0-9]+\.[0-9]+(/deb)'
+        replace: '\g<1>v{{ _k8s_target_minor }}\g<2>'
+      loop: "{{ _k8s_repo_files }}"
+
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ _k8s_repo_tmp.path }}"
+        state: absent
+      when: _k8s_repo_tmp.path is defined

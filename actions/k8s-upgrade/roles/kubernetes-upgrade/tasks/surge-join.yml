@@ -9,8 +9,9 @@
 #   join  → install the kube packages at the target and kubeadm join.
 #
 # The host must already be ready to be a node: container runtime, swap,
-# kernel modules and the pkgs.k8s.io repo for the target minor, as for
-# any host before `kubeadm join`. The action does not set those up.
+# kernel modules and a pkgs.k8s.io apt source, as for any host before
+# `kubeadm join`. The action does not set those up; it only moves an
+# existing pkgs.k8s.io source to the target minor (apt-prepare.yml).
 
 - name: Nothing to do for the surge node
   ansible.builtin.meta: end_host
@@ -42,20 +43,19 @@
     - k8s_surge_state == 'join'
     - _k8s_surge_kubelet_conf.stat.exists
 
-- name: Refresh the apt cache
-  ansible.builtin.apt:
-    update_cache: true
-    cache_valid_time: 0
-  changed_when: false
-  when: k8s_surge_state == 'join'
-
 - name: Pre-flight checks
-  # The kube packages must be downloadable at the target. The kubelet
-  # check is skipped for the surge node, which has no kubelet running yet.
+  # The kubelet check is skipped for the surge node, which has no kubelet
+  # running yet.
   ansible.builtin.import_tasks: preflight.yml
   when:
     - k8s_surge_state == 'join'
     - not skip_preflight | bool
+
+- name: Get apt ready for the target version
+  # Moves the host's pkgs.k8s.io source to the target minor, as for the
+  # cluster nodes, and checks the kube packages are downloadable.
+  ansible.builtin.import_tasks: apt-prepare.yml
+  when: k8s_surge_state == 'join'
 
 - name: Report what happens to the surge node
   ansible.builtin.debug:
