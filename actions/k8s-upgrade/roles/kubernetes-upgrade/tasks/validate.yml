@@ -5,20 +5,29 @@
 # only runs on the first control-plane node and only after it has been
 # drained.
 
+- name: Work out which parameters are wrong
+  # One line per bad parameter, so the message names only those. The
+  # labels are the ones the LabDog form shows.
+  vars:
+    _checks:
+      - ok: '{{ target_version is match("^[0-9]+\.[0-9]+\.[0-9]+$") }}'
+        msg: 'Target Kubernetes version must be a semver like "1.30.4" (got "{{ target_version }}").'
+      - ok: "{{ etcd_backup_dir is match('^/') }}"
+        msg: 'etcd backup directory must be an absolute path (got "{{ etcd_backup_dir }}").'
+      - ok: "{{ drain_timeout | int > 0 }}"
+        msg: 'Drain timeout must be a positive number of seconds (got "{{ drain_timeout }}").'
+      - ok: '{{ kubeadm_ignore_preflight_errors is match("^[A-Za-z0-9,\s-]*$") }}'
+        msg: >-
+          Ignore kubeadm preflight errors takes kubeadm check names
+          separated by commas, such as "CoreDNSUnsupportedPlugins" (got
+          "{{ kubeadm_ignore_preflight_errors }}").
+  ansible.builtin.set_fact:
+    _k8s_param_errors: "{{ _checks | rejectattr('ok') | map(attribute='msg') | list }}"
+
 - name: Verify the parameters
   ansible.builtin.assert:
-    that:
-      - target_version is match("^[0-9]+\.[0-9]+\.[0-9]+$")
-      - etcd_backup_dir is match("^/")
-      - drain_timeout | int > 0
-      - kubeadm_ignore_preflight_errors is match("^[A-Za-z0-9,\s-]*$")
-    fail_msg: >-
-      target_version must be a semver like "1.30.4" (got
-      "{{ target_version }}"), etcd_backup_dir an absolute path (got
-      "{{ etcd_backup_dir }}"), and drain_timeout a positive number of
-      seconds (got "{{ drain_timeout }}"). kubeadm_ignore_preflight_errors
-      takes kubeadm check names separated by commas (got
-      "{{ kubeadm_ignore_preflight_errors }}").
+    that: _k8s_param_errors | length == 0
+    fail_msg: "Bad parameters: {{ _k8s_param_errors | join(' ') }}"
 
 - name: Read the API server version
   ansible.builtin.command:
