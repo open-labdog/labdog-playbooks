@@ -28,6 +28,8 @@ the LabDog UI.
      Kubernetes node is in the run (unless `allow_partial_group`);
    - no kubelet is newer than the target, or more than three minors
      behind it;
+   - every node the run will drain has room for its pods on the rest of
+     the cluster (see [Drain capacity](#drain-capacity));
    - prints the plan, and a warning for HA clusters with stacked etcd
      (see [Rollback](#rollback)).
 3. **Upgrades control-plane nodes serially**, then checks that every
@@ -59,10 +61,41 @@ See [`manifest.yml`](./manifest.yml).
 | `drain_force` | bool | `false` | Pass `--force` to `kubectl drain`, deleting pods no controller manages. |
 | `etcd_backup_dir` | string | `/var/lib/labdog/etcd-backups` | Absolute path on the first control-plane node for the etcd snapshot. |
 | `allow_partial_group` | bool | `false` | Proceed when the cluster has nodes outside the targeted group. They stay on their current version. |
+| `skip_capacity_check` | bool | `false` | Run even when the drain capacity check finds a node whose pods would not fit elsewhere. The check still runs and reports. |
 
 The manifest sets `playbook_timeout_seconds: 7200`, which covers about
 six nodes at the 20-minute worst case. For a bigger cluster, raise it in
 a copy of the action or raise LabDog's global `ansible.playbook_timeout`.
+
+## Drain capacity
+
+Draining a node only works if its pods fit on the other nodes. When they
+don't, the evicted pods stay Pending and `kubectl drain` waits out
+`drain_timeout` with the node already cordoned. So before any node is
+touched, the driver runs
+[`files/drain_capacity.py`](./roles/kubernetes-upgrade/files/drain_capacity.py)
+(Python standard library, no extra packages). For each node the run
+will drain, with every other node as it is now, it:
+
+- takes the pods `kubectl drain --ignore-daemonsets` would evict (not
+  DaemonSet pods, static pods, or finished pods);
+- works out each pod's requests the way the scheduler does (containers,
+  init containers, sidecars, pod overhead), for every resource,
+  including the pod count and extended resources like GPUs;
+- finds where each pod may go: Ready, uncordoned nodes whose taints it
+  tolerates and that match its `nodeSelector` and required node
+  affinity;
+- places the pods biggest first, each on the node with the most room
+  left, against allocatable minus what that node's pods already request.
+
+It prints one line per node, and refuses the run when any pod has
+nowhere to go, naming the pods. A preview run prints the same lines.
+
+It does not model pod anti-affinity, topology spread constraints,
+PodDisruptionBudgets or volumes pinned to a zone or node, and a pod
+without requests always fits on paper (the report counts them). So a
+pass is not a guarantee. If the check refuses a cluster you know is
+fine, turn on `skip_capacity_check`.
 
 ## Failures and re-runs
 

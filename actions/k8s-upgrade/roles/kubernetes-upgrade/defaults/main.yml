@@ -8,6 +8,7 @@ drain_timeout: 300
 drain_force: false
 etcd_backup_dir: /var/lib/labdog/etcd-backups
 allow_partial_group: false
+skip_capacity_check: false
 
 # Preview mode: report_only, or a real `ansible-playbook --check` (what
 # LabDog's dry run passes since labdog#264). In both, the role runs every

@@ -57,3 +57,18 @@ jobs:
       # violations). New violations outside that baseline fail the job.
       - name: ansible-lint
         run: ansible-lint
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Helper scripts that roles ship under files/ and run on managed
+      # hosts. Standard library only, so no install step.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: unittest
+        run: python -m unittest discover -s tests -v

@@ -109,6 +109,9 @@
       minors behind v{{ target_version }}, which the upgraded API server
       would not support: {{ _k8s_kubelets_too_old | join(', ') or 'none' }}.
 
+- name: Check that every drain fits on the rest of the cluster
+  ansible.builtin.import_tasks: capacity.yml
+
 - name: Look for stacked etcd
   ansible.builtin.stat:
     path: /etc/kubernetes/manifests/etcd.yaml

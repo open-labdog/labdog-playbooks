@@ -1,0 +1,48 @@
+---
+# Would every node's pods fit on the rest of the cluster while that node
+# is drained? Run once on the driver before any node is cordoned, so a
+# cluster without the headroom is refused up front instead of a drain
+# hanging until drain_timeout with the node already cordoned. Read-only,
+# so it also runs in preview mode. files/drain_capacity.py does the work
+# and lists what it does not model (pod anti-affinity, topology spread,
+# PodDisruptionBudgets, volume topology).
+
+- name: List the nodes this run will drain
+  # The same test the per-node probe makes: a node whose kubelet is
+  # already exactly on target is skipped, so it is never drained.
+  vars:
+    _nodes: "{{ (_k8s_nodes_probe.stdout | from_json)['items'] }}"
+  ansible.builtin.set_fact:
+    _k8s_to_drain: >-
+      {{ _nodes | rejectattr('status.nodeInfo.kubeletVersion', 'equalto', 'v' + target_version)
+         | map(attribute='metadata.name') | select('in', _k8s_inventory_nodes) | sort | list }}
+
+- name: Simulate each drain against the rest of the cluster
+  ansible.builtin.script:
+    cmd: "drain_capacity.py {{ _k8s_to_drain | map('quote') | join(' ') }}"
+    executable: python3
+  register: _k8s_capacity_probe
+  changed_when: false
+  check_mode: false
+  when: _k8s_to_drain | length > 0
+
+- name: Report the drain capacity
+  ansible.builtin.debug:
+    msg: "{{ (_k8s_capacity_probe.stdout | from_json).lines }}"
+  when: _k8s_to_drain | length > 0
+
+- name: Every drain fits on the rest of the cluster
+  ansible.builtin.assert:
+    that: (_k8s_capacity_probe.stdout | from_json).fits
+    fail_msg: >-
+      Not enough room on the rest of the cluster to drain
+      {{ (_k8s_capacity_probe.stdout | from_json).short | join(', ') }}:
+      the pods listed above would stay Pending, and kubectl drain would
+      wait out drain_timeout with the node cordoned. Free up capacity,
+      add a node, or lower the pods' requests. If you know they fit
+      anyway (pod anti-affinity or a request the check reads wrongly),
+      turn on "Skip the drain capacity check".
+    quiet: true
+  when:
+    - _k8s_to_drain | length > 0
+    - not skip_capacity_check | bool

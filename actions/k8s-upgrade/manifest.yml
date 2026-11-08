@@ -4,12 +4,14 @@ description: >-
   Drains, upgrades, and re-admits each node in the cluster, one at a
   time. Control plane nodes are upgraded first (kubeadm upgrade
   apply on the first, kubeadm upgrade node on the rest), then workers.
-  Takes an etcd snapshot before the control plane moves. Turn on
+  Takes an etcd snapshot before the control plane moves, and refuses
+  up front when a node's pods would not fit on the rest of the cluster
+  while it is drained. Turn on
   "Report only" to preview the plan without touching anything.
   Apt-only for now (Debian / Ubuntu).
 icon: Network
 playbook: playbook.yml
-version: "1.1"
+version: "1.2"
 estimated_duration: "5–20 min per node"
 destructive: true
 supports_group: true
@@ -72,3 +74,12 @@ parameters:
     help_text: >-
       Proceed even when the cluster has nodes that are not in the
       targeted LabDog group. Those nodes are left on their current version.
+  - key: skip_capacity_check
+    label: Skip the drain capacity check
+    type: bool
+    default: false
+    help_text: >-
+      Run even when the check finds that a node's pods would not fit on
+      the other nodes while it is drained. The check still runs and
+      reports. Use it when you know they fit anyway, for example because
+      a request is far above what the pod uses.
