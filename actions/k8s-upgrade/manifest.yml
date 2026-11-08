@@ -14,7 +14,7 @@ description: >-
   Apt-only for now (Debian / Ubuntu).
 icon: Network
 playbook: playbook.yml
-version: "1.4"
+version: "1.5"
 estimated_duration: "5–20 min per node"
 destructive: true
 supports_group: true

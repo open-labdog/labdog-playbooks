@@ -57,6 +57,11 @@ k8s_preview: "{{ report_only | bool or ansible_check_mode | default(false) | boo
 k8s_driver: "{{ groups['k8s_driver'] | first }}"
 k8s_kubeconfig: /etc/kubernetes/admin.conf
 
+# How often a failed drain is retried, and the pause between tries. See
+# drain.yml: a drain that hit its own timeout is not retried.
+k8s_drain_retries: 4
+k8s_drain_retry_delay: 20
+
 # Set on a node before the action cordons it, removed when the action
 # uncordons it. A node the operator cordoned by hand never gets it, so
 # the action never uncordons a node it did not cordon. A re-run finishes

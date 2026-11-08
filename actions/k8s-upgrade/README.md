@@ -90,7 +90,7 @@ See [`manifest.yml`](./manifest.yml).
 | `target_version` | string | required | Semver only (e.g. `1.30.4`). At most one minor above the running control plane. |
 | `report_only` | bool | `false` | Run every check and print what each node would do, without changing anything. A real `--check` run (LabDog's dry run, once it passes `--check`) does the same. Older LabDog dry runs set `ansible_check_mode` as an extra-var, which ansible-core ignores, so they upgrade for real: use `report_only` there. |
 | `skip_preflight` | bool | `false` | Bypass the per-node checks (kubelet running, target repository readable, packages downloadable). The apt source is still moved and the cache still refreshed. |
-| `drain_timeout` | int | `300` | Seconds `kubectl drain` may take. |
+| `drain_timeout` | int | `300` | Seconds `kubectl drain` may take. A drain that fails for another reason (a transient eviction error, such as an eviction webhook whose pod the drain just moved) is retried up to 4 times, 20 s apart (`k8s_drain_retries`, `k8s_drain_retry_delay`); one that hits this timeout is not. |
 | `drain_force` | bool | `false` | Pass `--force` to `kubectl drain`, deleting pods no controller manages. |
 | `etcd_backup_dir` | string | `/var/lib/labdog/etcd-backups` | Absolute path on the first control-plane node for the etcd snapshot. |
 | `allow_partial_group` | bool | `false` | Proceed when the cluster has nodes outside the targeted group. They stay on their current version. |
