@@ -1,0 +1,20 @@
+---
+# Assert every kube package is downloadable at target_version.
+# Input: _k8s_madison_lines (apt-cache madison output, one line per
+# version, like " kubeadm | 1.30.4-1.1 | https://pkgs.k8s.io/... Packages")
+# and _k8s_madison_where (where the list came from, for the message).
+
+- name: Confirm every kube package is downloadable at the target version
+  vars:
+    _available: >-
+      {{ _k8s_madison_lines
+         | map('split', '|') | selectattr('1', 'defined')
+         | map('map', 'trim') | map('list')
+         | selectattr('1', 'match', target_version | regex_escape + '-')
+         | map('first') | unique | list }}
+    _missing: "{{ kube_packages | difference(_available) }}"
+  ansible.builtin.assert:
+    that: _missing | length == 0
+    fail_msg: >-
+      Not downloadable at {{ target_version }} on {{ inventory_hostname }}
+      from {{ _k8s_madison_where }}: {{ _missing | join(', ') }}.

@@ -2,6 +2,7 @@
 # Per-node sanity checks. The play-level validation covers cluster-wide
 # invariants once on the driver; this file runs per node and verifies
 # the node itself is upgradeable. Read-only, so it runs in preview mode.
+# The apt source and package checks live in apt-prepare.yml.
 
 - name: Verify kubelet is running
   ansible.builtin.systemd_service:
@@ -10,28 +11,3 @@
   failed_when: _k8s_kubelet_unit.status.ActiveState | default('inactive') != 'active'
   # The surge node has no kubelet running before it joins.
   when: node_role | default('') != 'surge'
-
-- name: List the downloadable kube package versions
-  ansible.builtin.command:
-    argv: "{{ ['apt-cache', 'madison'] + kube_packages }}"
-  register: _k8s_madison
-  changed_when: false
-  check_mode: false
-
-- name: Confirm every kube package is downloadable at the target version
-  # madison prints " kubeadm | 1.30.4-1.1 | https://pkgs.k8s.io/... Packages".
-  # Fail BEFORE drain rather than half-way through the upgrade.
-  vars:
-    _available: >-
-      {{ _k8s_madison.stdout_lines
-         | map('split', '|') | selectattr('1', 'defined')
-         | map('map', 'trim') | map('list')
-         | selectattr('1', 'match', target_version | regex_escape + '-')
-         | map('first') | unique | list }}
-    _missing: "{{ kube_packages | difference(_available) }}"
-  ansible.builtin.assert:
-    that: _missing | length == 0
-    fail_msg: >-
-      Not downloadable at {{ target_version }} on {{ inventory_hostname }}:
-      {{ _missing | join(', ') }}. Check that the pkgs.k8s.io repo for
-      v{{ target_version.split('.')[:2] | join('.') }} is configured.

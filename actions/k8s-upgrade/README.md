@@ -35,11 +35,13 @@ the LabDog UI.
 3. **Upgrades control-plane nodes serially**, then checks that every
    control-plane kubelet is on target, joins the
    [surge node](#surge-node) if one is set, then **upgrades workers
-   serially**, then removes the surge node. Each node: refresh the apt cache, preflight (kubelet
-   running; `kubeadm`, `kubelet`, `kubectl` downloadable at the
-   target), cordon and drain, install `kubeadm`, `kubeadm upgrade`,
-   install `kubelet` and `kubectl`, restart kubelet, wait for Ready,
-   uncordon. The packages are held again afterwards.
+   serially**, then removes the surge node. Each node: preflight
+   (kubelet running), move the kube apt source to the target minor (see
+   [Apt repository](#apt-repository)), refresh the apt cache, check that
+   `kubeadm`, `kubelet` and `kubectl` are downloadable at the target,
+   cordon and drain, install `kubeadm`, `kubeadm upgrade`, install
+   `kubelet` and `kubectl`, restart kubelet, wait for Ready, uncordon.
+   The packages are held again afterwards.
 4. **Snapshots etcd** on the first control-plane node right before
    `kubeadm upgrade apply`, when etcd is stacked (a kubeadm static
    pod). The snapshot is written with the etcd image's own `etcdctl`
@@ -49,6 +51,36 @@ the LabDog UI.
 Any failed node stops the whole run (`serial: 1` plus
 `any_errors_fatal`), so no later node is touched.
 
+## Apt repository
+
+pkgs.k8s.io has one apt repository per minor version
+(`https://pkgs.k8s.io/core:/stable:/v1.30/deb/`), so a minor upgrade
+needs each node's source moved first. The action does that, per node,
+right before that node is upgraded (and on the surge node before it
+joins), in `tasks/apt-prepare.yml`:
+
+- It looks for active lines naming `pkgs.k8s.io/core:/stable:/vX.Y/deb`
+  in `/etc/apt/sources.list` and `/etc/apt/sources.list.d/*.list`,
+  `*.sources` (one-line and deb822). The path is matched anywhere in the
+  URL, so a mirror that keeps it (an apt-cacher-ng remap, say) keeps
+  being used. Commented lines, and files apt ignores such as
+  `kubernetes.list.backup.1770197682`, are left alone.
+- In preflight it reads the target repository through a scratch apt
+  setup with a freshly downloaded `Release.key`, so the node's own apt
+  configuration and cache are untouched. This also runs in preview
+  mode, which is how `report_only` can confirm a new minor's packages
+  exist.
+- Then it installs the target repository's `Release.key` at the keyring
+  the source names (`signed-by=` or `Signed-By:`; binary for `.gpg`,
+  armored for `.asc`) and rewrites the minor in those files. Keyrings
+  of other sources in the same file are never touched.
+
+It never adds a repository. A node with no pkgs.k8s.io source can still
+take a patch upgrade from whatever source it has, but a minor upgrade
+stops with an error before anything changes. The kube packages stay held
+throughout, so a node whose source moved but whose upgrade then failed
+keeps running its old version; a re-run carries on.
+
 ## Manifest parameters
 
 See [`manifest.yml`](./manifest.yml).
@@ -57,7 +89,7 @@ See [`manifest.yml`](./manifest.yml).
 |---|---|---|---|
 | `target_version` | string | required | Semver only (e.g. `1.30.4`). At most one minor above the running control plane. |
 | `report_only` | bool | `false` | Run every check and print what each node would do, without changing anything. A real `--check` run (LabDog's dry run, once it passes `--check`) does the same. Older LabDog dry runs set `ansible_check_mode` as an extra-var, which ansible-core ignores, so they upgrade for real: use `report_only` there. |
-| `skip_preflight` | bool | `false` | Bypass the per-node checks. The apt cache is still refreshed. |
+| `skip_preflight` | bool | `false` | Bypass the per-node checks (kubelet running, target repository readable, packages downloadable). The apt source is still moved and the cache still refreshed. |
 | `drain_timeout` | int | `300` | Seconds `kubectl drain` may take. |
 | `drain_force` | bool | `false` | Pass `--force` to `kubectl drain`, deleting pods no controller manages. |
 | `etcd_backup_dir` | string | `/var/lib/labdog/etcd-backups` | Absolute path on the first control-plane node for the etcd snapshot. |
@@ -132,8 +164,8 @@ What the surge host needs:
 - to be in the targeted LabDog group, and reachable like any member;
 - to be ready to be a node, which the action does not set up: a
   container runtime configured for Kubernetes, swap off, the usual
-  kernel modules and sysctls, and the pkgs.k8s.io repository for the
-  target minor (the preflight checks the packages are downloadable);
+  kernel modules and sysctls, and a pkgs.k8s.io apt source (any minor:
+  the action moves it to the target, see [Apt repository](#apt-repository));
 - Debian or Ubuntu;
 - enough allocatable room for what the drains need to move. The
   capacity check tells you before anything is touched.
@@ -213,8 +245,10 @@ done, so reverting the whole cluster afterwards is a manual Proxmox job.
 ## Requirements
 
 - **OS**: Debian / Ubuntu on every node (`apt`-managed
-  `kubeadm`/`kubelet`/`kubectl` from the pkgs.k8s.io repo for the target
-  minor).
+  `kubeadm`/`kubelet`/`kubectl` from a pkgs.k8s.io repository, which the
+  action moves to the target minor).
+- **gpg** on every node, to unpack the repository key (installing
+  Kubernetes from pkgs.k8s.io needs it too).
 - **Inventory**: every node's Ansible hostname must equal its
   Kubernetes node name. The validation step fails fast on mismatch.
 - **kubeconfig**: `/etc/kubernetes/admin.conf` on the first

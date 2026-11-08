@@ -1,0 +1,28 @@
+---
+# Fetch the target repository's signing key into the scratch directory
+# _k8s_repo_tmp, armored (Release.key) and as a binary keyring
+# (keyring.gpg). Every pkgs.k8s.io minor publishes its own Release.key,
+# and the key gets new expiry dates over time, so it is fetched fresh
+# rather than trusting the copy the node already has.
+
+- name: Download the signing key for v{{ _k8s_target_minor }}
+  ansible.builtin.get_url:
+    url: "{{ _k8s_repo_url }}Release.key"
+    dest: "{{ _k8s_repo_tmp.path }}/Release.key"
+    mode: "0644"
+  # A scratch file in preview mode as well, so it never counts as a change.
+  changed_when: false
+  check_mode: false
+
+- name: Unpack the key into a binary keyring
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --yes
+      - --dearmor
+      - --output
+      - "{{ _k8s_repo_tmp.path }}/keyring.gpg"
+      - "{{ _k8s_repo_tmp.path }}/Release.key"
+  changed_when: false
+  check_mode: false

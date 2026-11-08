@@ -4,7 +4,8 @@ description: >-
   Drains, upgrades, and re-admits each node in the cluster, one at a
   time. Control plane nodes are upgraded first (kubeadm upgrade
   apply on the first, kubeadm upgrade node on the rest), then workers.
-  Takes an etcd snapshot before the control plane moves, and refuses
+  Moves each node's pkgs.k8s.io apt source to the target minor first,
+  takes an etcd snapshot before the control plane moves, and refuses
   up front when a node's pods would not fit on the rest of the cluster
   while it is drained. Optionally joins a spare host as a temporary
   surge node so worker drains have room. Turn on
@@ -12,7 +13,7 @@ description: >-
   Apt-only for now (Debian / Ubuntu).
 icon: Network
 playbook: playbook.yml
-version: "1.2"
+version: "1.3"
 estimated_duration: "5–20 min per node"
 destructive: true
 supports_group: true
@@ -33,8 +34,8 @@ parameters:
     required: true
     help_text: >-
       Semver only (e.g. 1.30.4). At most one minor above the running
-      control plane. Must already be downloadable from the apt repo
-      configured on every node.
+      control plane. For a new minor, the action moves each node's
+      pkgs.k8s.io apt source to it.
   - key: report_only
     label: Report only
     type: bool
@@ -47,7 +48,7 @@ parameters:
     label: Skip preflight checks
     type: bool
     default: false
-    help_text: Bypass the per-node sanity checks (kubelet running, packages downloadable). Use sparingly.
+    help_text: Bypass the per-node sanity checks (kubelet running, target repository readable, packages downloadable). Use sparingly.
   - key: drain_timeout
     label: Drain timeout (seconds)
     type: int

@@ -30,20 +30,15 @@
          ' (left cordoned afterwards: it was cordoned before this run)'
          if _k8s_was_unschedulable and not _k8s_cordoned_by_us else '' }}.
 
-- name: Refresh the apt cache
-  # Outside preflight so skip_preflight can't send a drained node into
-  # an install from a stale cache.
-  ansible.builtin.apt:
-    update_cache: true
-    cache_valid_time: 0
-  changed_when: false
-  when: not _k8s_already_on_target
-
 - name: Pre-flight checks
   ansible.builtin.import_tasks: preflight.yml
   when:
     - not _k8s_already_on_target
     - not skip_preflight | bool
+
+- name: Get apt ready for the target version
+  ansible.builtin.import_tasks: apt-prepare.yml
+  when: not _k8s_already_on_target
 
 - name: Upgrade the node
   when:

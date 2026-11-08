@@ -1,0 +1,87 @@
+---
+# Read-only: which pkgs.k8s.io minor the node's apt sources point at.
+# pkgs.k8s.io has one repository per minor version, so a minor upgrade
+# needs the sources moved to the target minor first (repo-switch.yml).
+#
+# Both one-line (.list) and deb822 (.sources) files count, and so does a
+# local mirror whose URL still carries the pkgs.k8s.io path (an
+# apt-cacher-ng remap, say). Commented-out lines do not. apt ignores files
+# with any other extension, such as kubernetes.list.backup.1770197682, so
+# they are left alone too.
+
+- name: Find the apt sources that point at pkgs.k8s.io
+  ansible.builtin.find:
+    paths: [/etc/apt, /etc/apt/sources.list.d]
+    patterns: [sources.list, "*.list", "*.sources"]
+    contains: ".*{{ k8s_repo_path_regex }}.*"
+  register: _k8s_repo_find
+
+- name: Read those sources
+  ansible.builtin.slurp:
+    path: "{{ item.path }}"
+  loop: "{{ _k8s_repo_find.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _k8s_repo_slurp
+
+- name: Work out the configured minor and keyring
+  vars:
+    _contents: "{{ _k8s_repo_slurp.results | map(attribute='content') | map('b64decode') | list }}"
+    _active: >-
+      {{ _contents | map('regex_findall', '[^\n]+') | flatten
+         | reject('match', '\s*#') | select('search', k8s_repo_path_regex) | list }}
+    _target_minor: "{{ target_version.split('.')[:2] | join('.') }}"
+  ansible.builtin.set_fact:
+    _k8s_target_minor: "{{ _target_minor }}"
+    # Files whose active lines name the repo; the replace in
+    # repo-switch.yml only touches these.
+    _k8s_repo_files: >-
+      {% set out = [] %}{% for r in _k8s_repo_slurp.results
+         if (r.content | b64decode) is search('(?m)^[^#\n]*' ~ k8s_repo_path_regex)
+      %}{{ out.append(r.item.path) }}{% endfor %}{{ out }}
+    _k8s_repo_minors: >-
+      {{ _active | map('regex_search', k8s_repo_path_regex, '\1') | flatten | unique | list }}
+    # The target repository at the node's own base URL, so a mirror keeps
+    # being used.
+    _k8s_repo_url: >-
+      {{ ((_active | first | regex_search('(\S*pkgs\.k8s\.io/core:/stable:/)v', '\1') | first)
+          ~ 'v' ~ _target_minor ~ '/deb/') if _active | length > 0 else '' }}
+    # Keyrings named by the kube source only: signed-by= on its one-line
+    # entries, Signed-By: in its deb822 stanza. A sources.list can carry
+    # Debian's own entries with their own keyrings, which must not be
+    # touched. An inline deb822 key (not a path) is skipped.
+    _k8s_repo_keyrings: >-
+      {{ (_active | map('regex_findall', 'signed-by=([^\]\s]+)') | flatten
+          + (_contents | map('regex_findall', '(?s)(?:[^\n]|\n(?!\s*\n))+') | flatten
+             | select('search', '(?m)^[^#\n]*' ~ k8s_repo_path_regex)
+             | map('regex_findall', '(?mi)^Signed-By:\s*(/\S+)') | flatten))
+         | select('match', '/') | unique | list }}
+    # Nothing to move when the sources already name only the target minor,
+    # or when there is no pkgs.k8s.io source at all (see the assert below).
+    _k8s_repo_switch: >-
+      {{ _active | length > 0
+         and (_active | map('regex_search', k8s_repo_path_regex, '\1') | flatten | unique | list) != [_target_minor] }}
+
+- name: Report the kube apt source
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: kube apt source
+      {{ ('on v' ~ (_k8s_repo_minors | join(', v'))) if _k8s_repo_files else 'not found' }}
+      {{- (', moves to v' ~ _k8s_target_minor ~ ' (' ~ (_k8s_repo_files | join(', ')) ~ ')') if _k8s_repo_switch else '' }}.
+
+- name: Refuse a minor upgrade on a node with no pkgs.k8s.io source
+  # A patch upgrade still works from whatever source the node has (a
+  # mirror under another path, say), and preflight checks the packages
+  # are there. A minor upgrade needs a repository to move, and adding one
+  # from nothing is a bootstrap job.
+  ansible.builtin.assert:
+    that: >-
+      _k8s_repo_files | length > 0
+      or (_k8s_current | default('') | regex_search('^v[0-9]+\.[0-9]+') | default('', true)) == 'v' ~ _k8s_target_minor
+    fail_msg: >-
+      {{ inventory_hostname }} runs kubelet {{ _k8s_current | default('') or 'not found' }}
+      and has no active apt source for pkgs.k8s.io (looked for
+      "core:/stable:/vX.Y/deb" in /etc/apt/sources.list and
+      /etc/apt/sources.list.d/*.list, *.sources), so the action cannot move
+      it to v{{ _k8s_target_minor }}. Point its kube repository at
+      v{{ _k8s_target_minor }} by hand and re-run.
