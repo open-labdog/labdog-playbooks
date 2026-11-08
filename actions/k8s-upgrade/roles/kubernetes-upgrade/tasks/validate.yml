@@ -11,11 +11,14 @@
       - target_version is match("^[0-9]+\.[0-9]+\.[0-9]+$")
       - etcd_backup_dir is match("^/")
       - drain_timeout | int > 0
+      - kubeadm_ignore_preflight_errors is match("^[A-Za-z0-9,\s-]*$")
     fail_msg: >-
       target_version must be a semver like "1.30.4" (got
       "{{ target_version }}"), etcd_backup_dir an absolute path (got
       "{{ etcd_backup_dir }}"), and drain_timeout a positive number of
-      seconds (got "{{ drain_timeout }}").
+      seconds (got "{{ drain_timeout }}"). kubeadm_ignore_preflight_errors
+      takes kubeadm check names separated by commas (got
+      "{{ kubeadm_ignore_preflight_errors }}").
 
 - name: Read the API server version
   ansible.builtin.command:
@@ -84,6 +87,9 @@
       Add them to the LabDog group (or check whether their snapshot
       failed), or turn on "Allow nodes outside the group" to leave them
       on their current version.
+
+- name: Check the CoreDNS config for plugins kubeadm cannot migrate
+  ansible.builtin.import_tasks: coredns-check.yml
 
 - name: The target is not a downgrade and skips no minor
   ansible.builtin.assert:

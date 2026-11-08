@@ -33,18 +33,18 @@
   # Read-only; failures mean the target is not a valid upgrade from
   # here. Surface the error and stop before apply.
   ansible.builtin.command:
-    argv: [kubeadm, upgrade, plan, "v{{ target_version }}"]
+    argv: "{{ ['kubeadm', 'upgrade', 'plan', 'v' ~ target_version] + k8s_kubeadm_extra_args }}"
   when: inventory_hostname == k8s_driver
   changed_when: false
 
 - name: Run kubeadm upgrade apply on the first CP — v{{ target_version }}
   ansible.builtin.command:
-    argv: [kubeadm, upgrade, apply, "v{{ target_version }}", --yes]
+    argv: "{{ ['kubeadm', 'upgrade', 'apply', 'v' ~ target_version, '--yes'] + k8s_kubeadm_extra_args }}"
   when: inventory_hostname == k8s_driver
   changed_when: true
 
 - name: Run kubeadm upgrade node
   ansible.builtin.command:
-    argv: [kubeadm, upgrade, node]
+    argv: "{{ ['kubeadm', 'upgrade', 'node'] + k8s_kubeadm_extra_args }}"
   when: inventory_hostname != k8s_driver
   changed_when: true

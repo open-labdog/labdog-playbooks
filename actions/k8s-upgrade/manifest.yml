@@ -7,13 +7,14 @@ description: >-
   Moves each node's pkgs.k8s.io apt source to the target minor first,
   takes an etcd snapshot before the control plane moves, and refuses
   up front when a node's pods would not fit on the rest of the cluster
-  while it is drained. Optionally joins a spare host as a temporary
+  while it is drained, or when the CoreDNS config uses a plugin kubeadm
+  cannot migrate. Optionally joins a spare host as a temporary
   surge node so worker drains have room. Turn on
   "Report only" to preview the plan without touching anything.
   Apt-only for now (Debian / Ubuntu).
 icon: Network
 playbook: playbook.yml
-version: "1.3"
+version: "1.4"
 estimated_duration: "5–20 min per node"
 destructive: true
 supports_group: true
@@ -95,3 +96,14 @@ parameters:
       pkgs.k8s.io repo for the target minor). It joins at the target
       version after the control plane, takes pods while the workers are
       drained, and is drained, reset and removed after the last worker.
+  - key: kubeadm_ignore_preflight_errors
+    label: Ignore kubeadm preflight errors
+    type: string
+    default: ""
+    help_text: >-
+      Optional. kubeadm preflight checks to skip, separated by commas,
+      passed as --ignore-preflight-errors to kubeadm upgrade plan, apply
+      and node. Set CoreDNSUnsupportedPlugins when the CoreDNS Corefile
+      uses a plugin kubeadm cannot migrate (such as template) and you have
+      checked it works on the new CoreDNS; kubeadm then leaves that block
+      as it is.

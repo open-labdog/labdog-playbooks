@@ -96,6 +96,7 @@ See [`manifest.yml`](./manifest.yml).
 | `allow_partial_group` | bool | `false` | Proceed when the cluster has nodes outside the targeted group. They stay on their current version. |
 | `skip_capacity_check` | bool | `false` | Run even when the drain capacity check finds a node whose pods would not fit elsewhere. The check still runs and reports. |
 | `surge_node` | string | `""` | A spare host in the group that joins as a temporary worker while the workers are drained. See [Surge node](#surge-node). |
+| `kubeadm_ignore_preflight_errors` | string | `""` | kubeadm preflight checks to skip, comma-separated, passed as `--ignore-preflight-errors` to `kubeadm upgrade plan`, `apply` and `node`. See [CoreDNS](#coredns). |
 
 The manifest sets `playbook_timeout_seconds: 7200`, which covers about
 six nodes at the 20-minute worst case. For a bigger cluster, raise it in
@@ -193,6 +194,25 @@ that run first, or remove it by hand with `kubectl drain`,
 
 `verify.yml` skips the surge node: its kubelet is stopped once it is
 reset, and a VM rollback of it would only bring back an idle host.
+
+## CoreDNS
+
+Most minor upgrades move CoreDNS to a new version, and kubeadm migrates
+the Corefile (configmap `kube-system/coredns`) on the way. Its migration
+tool knows a fixed set of plugins (the defaults kubeadm writes, plus
+`log`, `autopath`, `k8s_external`, `hosts`, `rewrite`, `transfer`). A
+Corefile with any other plugin, such as
+`template IN AAAA . { rcode NOERROR }` on an IPv4-only cluster, fails
+kubeadm's `CoreDNSUnsupportedPlugins` preflight check.
+
+kubeadm only runs that check on the first control-plane node, after it
+is cordoned and has the new kubeadm, and a preview never installs that
+kubeadm. So the validation step reads the Corefile itself: it reports
+plugins outside that set, and refuses a minor upgrade before any node is
+touched. When the plugin works on the new CoreDNS, set
+`kubeadm_ignore_preflight_errors` to `CoreDNSUnsupportedPlugins`.
+kubeadm then migrates the rest of the Corefile and leaves those blocks
+as they are.
 
 ## Failures and re-runs
 
