@@ -31,7 +31,10 @@ the LabDog UI.
    - every node the run will drain has room for its pods on the rest of
      the cluster (see [Drain capacity](#drain-capacity));
    - prints the plan, and a warning for HA clusters with stacked etcd
-     (see [Rollback](#rollback)).
+     (see [Rollback](#rollback));
+   - every node has the tools the run will call (see
+     [Requirements](#requirements)), checked on all nodes at once before
+     any node is cordoned. Not skipped by `skip_preflight`.
 3. **Upgrades control-plane nodes serially**, then checks that every
    control-plane kubelet is on target, joins the
    [surge node](#surge-node) if one is set, then **upgrades workers
@@ -276,8 +279,17 @@ done, so reverting the whole cluster afterwards is a manual Proxmox job.
   Kubernetes node name. The validation step fails fast on mismatch.
 - **kubeconfig**: `/etc/kubernetes/admin.conf` on the first
   control-plane node.
-- **crictl** on the first control-plane node for the etcd snapshot
-  (kubeadm installs it).
+- **crictl** (package `cri-tools`) on the first control-plane node for
+  the etcd snapshot, with a running etcd container whose image has
+  `etcdctl`. Since Kubernetes 1.36 the kubeadm package no longer
+  depends on cri-tools, so `apt-get autoremove` removes it unless it is
+  marked manually installed (`apt-mark manual cri-tools`).
+- **apt-get, apt-cache, dpkg, systemctl** on every node, and
+  **kubectl, kubeadm** on the first control-plane node.
+
+The action checks all of these on every node before it changes
+anything, and names each missing tool with the package that provides
+it.
 - **Privileges**: sudo/root on every node.
 
 ## Role
