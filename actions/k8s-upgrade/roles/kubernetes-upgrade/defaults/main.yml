@@ -62,6 +62,13 @@ k8s_kubeconfig: /etc/kubernetes/admin.conf
 k8s_drain_retries: 4
 k8s_drain_retry_delay: 20
 
+# How often the uncordon (and the cordon annotation removal) is retried
+# when the API server is unreachable, and the pause between tries. A
+# control-plane node's API server can restart again after the node is
+# Ready (see uncordon.yml); 12 x 10 s covers that.
+k8s_api_retries: 12
+k8s_api_retry_delay: 10
+
 # Set on a node before the action cordons it, removed when the action
 # uncordons it. A node the operator cordoned by hand never gets it, so
 # the action never uncordons a node it did not cordon. A re-run finishes

@@ -3,6 +3,25 @@
 # uncordoning — otherwise drain on the next iteration could fail
 # because the API server still sees the node as NotReady from the
 # kubelet restart. Only a node this action cordoned is uncordoned.
+#
+# On a control-plane node the API server can go away again after the
+# node already reported Ready: the restarted kubelet re-creates its
+# static pods, and run 406 (1.36 -> 1.37) saw kube-apiserver restart
+# about a minute after the kubelet did, so the uncordon got
+# "connection refused". Wait for /readyz first, and retry the uncordon
+# and the annotation removal while the API server is unreachable.
+
+- name: Wait for the API server to be ready — {{ inventory_hostname }}
+  ansible.builtin.command:
+    argv: [kubectl, get, --raw=/readyz]
+  delegate_to: "{{ k8s_driver }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_readyz
+  changed_when: false
+  until: _k8s_readyz.rc == 0
+  retries: 60
+  delay: 5
 
 - name: Wait for node to report Ready — {{ inventory_hostname }}
   ansible.builtin.command:
@@ -28,6 +47,10 @@
   delegate_to: "{{ k8s_driver }}"
   environment:
     KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_uncordon
+  until: _k8s_uncordon.rc == 0
+  retries: "{{ k8s_api_retries | int }}"
+  delay: "{{ k8s_api_retry_delay | int }}"
   changed_when: true
   when: _k8s_cordoned_by_us
 
@@ -37,5 +60,9 @@
   delegate_to: "{{ k8s_driver }}"
   environment:
     KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: _k8s_uncordon_annotation
+  until: _k8s_uncordon_annotation.rc == 0
+  retries: "{{ k8s_api_retries | int }}"
+  delay: "{{ k8s_api_retry_delay | int }}"
   changed_when: true
   when: _k8s_cordoned_by_us

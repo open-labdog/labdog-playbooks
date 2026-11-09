@@ -40,7 +40,10 @@ the LabDog UI.
    [Apt repository](#apt-repository)), refresh the apt cache, check that
    `kubeadm`, `kubelet` and `kubectl` are downloadable at the target,
    cordon and drain, install `kubeadm`, `kubeadm upgrade`, install
-   `kubelet` and `kubectl`, restart kubelet, wait for Ready, uncordon.
+   `kubelet` and `kubectl`, restart kubelet, wait for Ready and for the
+   API server's `/readyz`, uncordon (retried for up to 2 minutes while
+   the API server is unreachable, since a control-plane node's API
+   server can restart again after the kubelet does).
    The packages are held again afterwards.
 4. **Snapshots etcd** on the first control-plane node right before
    `kubeadm upgrade apply`, when etcd is stacked (a kubeadm static
