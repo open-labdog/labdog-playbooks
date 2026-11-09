@@ -69,6 +69,18 @@ k8s_drain_retry_delay: 20
 k8s_api_retries: 12
 k8s_api_retry_delay: 10
 
+# The Debian package that provides each tool the dependency check
+# (tasks/dependencies.yml) looks for, for its error message.
+k8s_dependency_packages:
+  apt-get: apt
+  apt-cache: apt
+  dpkg: dpkg
+  systemctl: systemd
+  gpg: gpg
+  kubectl: kubectl
+  kubeadm: kubeadm
+  crictl: cri-tools
+
 # Set on a node before the action cordons it, removed when the action
 # uncordons it. A node the operator cordoned by hand never gets it, so
 # the action never uncordons a node it did not cordon. A re-run finishes

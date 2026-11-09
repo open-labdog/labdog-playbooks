@@ -82,6 +82,22 @@
         name: kubernetes-upgrade
         tasks_from: validate.yml
 
+- name: Check every node has the tools the upgrade needs
+  # Before any node is cordoned, so a missing tool on a worker does not
+  # surface only after the control plane has moved. any_errors_fatal
+  # still lets every node report in the same task, then stops the run.
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars:
+    _k8s_dep_surge: "{{ inventory_hostname in groups['k8s_surge'] | default([]) }}"
+  tasks:
+    - name: Check the node's tools
+      ansible.builtin.import_role:
+        name: kubernetes-upgrade
+        tasks_from: dependencies.yml
+
 - name: Upgrade control-plane nodes serially
   hosts: k8s_control_plane
   # The driver (sorted first) must run `kubeadm upgrade apply` before

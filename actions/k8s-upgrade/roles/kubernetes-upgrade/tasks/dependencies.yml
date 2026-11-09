@@ -1,0 +1,106 @@
+---
+# Every tool the action calls, checked on every node of the run before
+# any node is cordoned. Without it a missing tool only shows when the
+# node that needs it gets its turn, possibly after the control plane has
+# moved. Run 411 hit that: the nightly `apt-get autoremove` had purged
+# cri-tools (kubeadm stopped depending on it in 1.36), so crictl was
+# gone and the etcd backup failed on a drained node.
+#
+# Read-only, so it runs in preview mode too. Not skipped by
+# skip_preflight: each check is cheap, and a missing tool fails the
+# node later anyway.
+
+- name: Look for the stacked etcd manifest
+  ansible.builtin.stat:
+    path: /etc/kubernetes/manifests/etcd.yaml
+  register: _k8s_dep_etcd_manifest
+  when: inventory_hostname == k8s_driver
+
+- name: Probe the kubelet version for the dependency check
+  # A node already on the target minor keeps its apt source, so it
+  # needs no gpg.
+  ansible.builtin.command:
+    argv: [kubelet, --version]
+  register: _k8s_dep_kubelet
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not _k8s_dep_surge
+
+- name: Work out which tools this node needs
+  vars:
+    _target_minor: "{{ target_version.split('.')[:2] | join('.') }}"
+    _kubelet_minor: >-
+      {{ (_k8s_dep_kubelet.stdout | default('') | regex_search('v([0-9]+\.[0-9]+)', '\1') or [''])
+         | first }}
+    _apt: [apt-get, apt-cache, dpkg, systemctl]
+    _gpg: "{{ ['gpg'] if _k8s_dep_surge or _kubelet_minor != _target_minor else [] }}"
+    # The driver runs every kubectl call, kubeadm upgrade plan/apply and
+    # the surge node's join token.
+    _driver: "{{ ['kubectl', 'kubeadm'] if inventory_hostname == k8s_driver else [] }}"
+    # The etcd backup reaches etcdctl through crictl, on the driver only.
+    _etcd: "{{ ['crictl'] if inventory_hostname == k8s_driver and (_k8s_dep_etcd_manifest.stat.exists | default(false)) else [] }}"
+  ansible.builtin.set_fact:
+    _k8s_dep_tools: "{{ _apt + _gpg + _driver + _etcd }}"
+
+- name: Look for each tool on the node
+  # Prints the name of every tool that is not on root's PATH.
+  vars:
+    _script: 'for t in "$@"; do command -v "$t" >/dev/null 2>&1 || echo "$t"; done'
+  ansible.builtin.command:
+    argv: "{{ ['sh', '-c', _script, 'sh'] + _k8s_dep_tools }}"
+  register: _k8s_dep_missing
+  changed_when: false
+  check_mode: false
+
+- name: Check the driver's kubeconfig
+  ansible.builtin.stat:
+    path: "{{ k8s_kubeconfig }}"
+  register: _k8s_dep_kubeconfig
+  when: inventory_hostname == k8s_driver
+
+- name: Find the running etcd container
+  ansible.builtin.command:
+    argv: [crictl, ps, --name, "^etcd$", --state, running, --quiet]
+  register: _k8s_dep_etcd_container
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - inventory_hostname == k8s_driver
+    - _k8s_dep_etcd_manifest.stat.exists | default(false)
+    - "'crictl' not in _k8s_dep_missing.stdout_lines"
+
+- name: Check that etcdctl runs inside the etcd container
+  ansible.builtin.command:
+    argv: [crictl, exec, "{{ _k8s_dep_etcd_container.stdout_lines | first }}", etcdctl, version]
+  register: _k8s_dep_etcdctl
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - _k8s_dep_etcd_container.stdout_lines | default([]) | length > 0
+
+- name: Refuse a node that is missing something
+  vars:
+    _missing: "{{ _k8s_dep_missing.stdout_lines }}"
+    _missing_text: >-
+      {% for t in _missing %}{{ t }} (package {{ k8s_dependency_packages[t] | default(t) }}){{ ', ' if not loop.last else '' }}{% endfor %}
+    _problems: >-
+      {{ (['missing ' ~ _missing_text] if _missing else [])
+         + (['no ' ~ k8s_kubeconfig]
+            if inventory_hostname == k8s_driver and not _k8s_dep_kubeconfig.stat.exists else [])
+         + (['no running etcd container found with crictl']
+            if _k8s_dep_etcd_container.stdout_lines is defined
+               and _k8s_dep_etcd_container.stdout_lines | length == 0 else [])
+         + (['etcdctl does not run inside the etcd container: '
+             ~ (_k8s_dep_etcdctl.stderr | default('') | trim | truncate(200))]
+            if _k8s_dep_etcdctl.rc is defined and _k8s_dep_etcdctl.rc != 0 else []) }}
+  ansible.builtin.assert:
+    that: _problems | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }} cannot be upgraded: {{ _problems | join('; ') }}.
+      Install what is missing and mark it manually installed (apt-mark
+      manual), so `apt-get autoremove` keeps it, then re-run. No node has
+      been changed.
+    quiet: true
