@@ -216,7 +216,7 @@ To write a group-dispatch action:
 The [`actions/k8s-upgrade/`](./actions/k8s-upgrade) action is the
 reference implementation — it discovers which hosts are control-plane
 vs worker nodes in a setup play, then upgrades them serially. It is
-apt-only today; RHEL support is on the LabDog roadmap.
+apt-only today; RHEL support is on the [LabDog roadmap](https://github.com/orgs/open-labdog/projects/1).
 
 ## Examples
 
@@ -231,6 +231,10 @@ labdog repo at
   probes.
 
 ## Contributing / CI
+
+Planned work for this pack is tracked on the LabDog
+[roadmap board](https://github.com/orgs/open-labdog/projects/1), not in
+the repository.
 
 Every merge request targeting the default branch runs the
 `validate-manifests` job in [`.gitlab-ci.yml`](./.gitlab-ci.yml). The
