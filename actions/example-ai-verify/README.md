@@ -66,7 +66,7 @@ pre-change snapshot and rolled back a run that had worked.
 That is the trap every AI verify prompt has to avoid. `linux-upgrade`
 restarts services; services log errors while restarting; a prompt that
 does not account for that can revert a successful upgrade. See
-[Writing the prompt](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md#writing-the-prompt)
+[Writing the prompt](https://github.com/open-unbork/unbork/blob/main/docs/ui/actions.md#writing-the-prompt)
 in LabDog's action docs.
 
 Note what the prompt does *not* say: it never tells the model to ignore
@@ -84,7 +84,7 @@ Proxmox VM mapping, verify enabled on the run):
 Without those the AI step is skipped and the action's own result stands,
 because `ai_verify_fail_closed` is left at its default of `false`. See
 [the AI verification section of LabDog's action
-docs](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md#ai-verification).
+docs](https://github.com/open-unbork/unbork/blob/main/docs/ui/actions.md#ai-verification).
 
 ## What you should see
 

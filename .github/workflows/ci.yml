@@ -27,7 +27,7 @@ jobs:
       # Pin LABDOG_REPO_REF to a release tag once labdog cuts them and bump
       # it intentionally; until then track the default branch.
       - name: Fetch labdog (manifest schema source)
-        run: git clone --depth 1 --branch "${LABDOG_REPO_REF:-main}" https://github.com/open-labdog/labdog.git _labdog_src
+        run: git clone --depth 1 --branch "${LABDOG_REPO_REF:-main}" https://github.com/open-unbork/unbork.git _labdog_src
         env:
           LABDOG_REPO_REF: main
 
