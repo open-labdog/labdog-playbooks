@@ -7,7 +7,7 @@ name: Notify labdog
 # a day.
 #
 # Requires a repo secret LABDOG_DISPATCH_TOKEN: a PAT (classic: `repo`, or
-# fine-grained: Contents read/write on open-labdog/labdog) — the default
+# fine-grained: Contents read/write on open-unbork/unbork) — the default
 # GITHUB_TOKEN cannot dispatch to another repository. Without it this
 # workflow no-ops (it does not fail the push).
 
@@ -29,5 +29,5 @@ jobs:
             echo "The labdog scheduled bump will still pick up this change within a day."
             exit 0
           fi
-          gh api repos/open-labdog/labdog/dispatches \
+          gh api repos/open-unbork/unbork/dispatches \
             -f event_type=playbooks-updated

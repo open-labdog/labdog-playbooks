@@ -1,6 +1,6 @@
 # labdog-playbooks
 
-Default action pack for [LabDog](https://github.com/open-labdog/labdog).
+Default action pack for [LabDog](https://github.com/open-unbork/unbork).
 
 LabDog admins add this repo as an action pack through the UI. The
 recommended path is **Integrations → Git Repos → Add Repository** —
@@ -12,7 +12,7 @@ key via the Action Registry on the **Action Packs** page.
 
 For the full user-facing guide — how packs load, how key collisions
 resolve, how to write your own — see
-[`docs/ui/actions.md`](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md)
+[`docs/ui/actions.md`](https://github.com/open-unbork/unbork/blob/main/docs/ui/actions.md)
 in the main labdog repo. This README covers the pack-author angle only.
 
 ## Pack layout
@@ -109,7 +109,7 @@ parameters:                        # passed as --extra-vars at runtime
 ```
 
 Full manifest field reference and edge cases:
-[docs/ui/actions.md#manifest-schema](https://github.com/open-labdog/labdog/blob/main/docs/ui/actions.md#manifest-schema).
+[docs/ui/actions.md#manifest-schema](https://github.com/open-unbork/unbork/blob/main/docs/ui/actions.md#manifest-schema).
 
 ## Verify playbooks
 
@@ -216,13 +216,13 @@ To write a group-dispatch action:
 The [`actions/k8s-upgrade/`](./actions/k8s-upgrade) action is the
 reference implementation — it discovers which hosts are control-plane
 vs worker nodes in a setup play, then upgrades them serially. It is
-apt-only today; RHEL support is on the [LabDog roadmap](https://github.com/orgs/open-labdog/projects/1).
+apt-only today; RHEL support is on the [LabDog roadmap](https://github.com/orgs/open-unbork/projects/1).
 
 ## Examples
 
 Starter packs demonstrating different patterns live in the main
 labdog repo at
-[`docs/examples/action-packs/`](https://github.com/open-labdog/labdog/tree/main/docs/examples/action-packs):
+[`docs/examples/action-packs/`](https://github.com/open-unbork/unbork/tree/main/docs/examples/action-packs):
 
 - `minimal-pack/` — smallest possible pack, one action.
 - `reboot-pack/` — destructive action with a parameter.
@@ -233,7 +233,7 @@ labdog repo at
 ## Contributing / CI
 
 Planned work for this pack is tracked on the LabDog
-[roadmap board](https://github.com/orgs/open-labdog/projects/1), not in
+[roadmap board](https://github.com/orgs/open-unbork/projects/1), not in
 the repository.
 
 Every merge request targeting the default branch runs the
@@ -252,7 +252,7 @@ and bump it deliberately when you want this pack to track new schema.
 To run the same check locally before pushing:
 
 ```bash
-git clone --depth 1 https://github.com/open-labdog/labdog.git /tmp/labdog
+git clone --depth 1 https://github.com/open-unbork/unbork.git /tmp/labdog
 LABDOG_SRC=/tmp/labdog python scripts/validate_manifests.py
 ```
 
